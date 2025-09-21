@@ -1,0 +1,9 @@
+/target
+*.err
+*.out
+/output/*
+*.npy
+job_locks/
+logs/
+data/
+output.tmp
