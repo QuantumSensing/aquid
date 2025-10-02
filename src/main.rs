@@ -37,7 +37,7 @@ fn generate_initial_state(gridpoints: (usize, usize)) -> Array2<Complex<f64>> {
             * initial_amplitude;
         let im = <StandardNormal as Distribution<f64>>::sample(&dist, &mut rng) as f64
             * initial_amplitude;
-        Complex::new(re, im)
+        Complex::new(0.0, 0.0)
     })
 }
 
@@ -167,8 +167,8 @@ fn main() {
 
     // Set up simulation parameters
     let mut simulation = Simulation {
-        grid_size: 80e-6 / scalings.length_x, // Size of the simulation box in scaled units
-        gridpoints: (84, 84),                 // Number of grid points in each dimension
+        grid_size: 100e-6 / scalings.length_x, // Size of the simulation box in scaled units
+        gridpoints: (256, 256),                 // Number of grid points in each dimension
         step_size: (0.0, 0.0),                // Will be calculated later
         timesteps: 6_000, // Number of time steps in the simulation (T ≈ 6 units)
         timestep: 1.0e-3, // Size of each time step in scaled units
