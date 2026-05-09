@@ -235,7 +235,6 @@ pub fn runge_kutta_step_2d(
     gridpoints: &(usize, usize),
     noise_magnitude: f64,
     interaction_strength: &f64,
-    _simulation: &Simulation,
     potential: &Array2<Complex<f64>>,
     condensate: &Condensate,
     k_sq: &Array2<f64>,
@@ -279,7 +278,6 @@ pub fn runge_kutta_step_2d(
 pub fn runge_kutta_2d(
     t0: f64,
     y0: Array2<Complex<f64>>,
-    _run_id: &isize,
     noise_magnitude: &f64,
     interaction_strength: &f64,
     simulation: &Simulation,
@@ -288,8 +286,6 @@ pub fn runge_kutta_2d(
     x_pos: &Array1<f64>,
     y_pos: &Array1<f64>,
     k_sq: &Array2<f64>,
-    _unscaled_chemical_potential: f64,
-    _unscaled_temperature: f64,
     save_full_trajectory: bool,
     dir: &Path,
 ) -> Array2<Complex<f64>> {
@@ -334,7 +330,6 @@ pub fn runge_kutta_2d(
             &simulation.gridpoints,
             *noise_magnitude,
             interaction_strength,
-            simulation,
             &potential,
             condensate,
             k_sq,

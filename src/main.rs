@@ -24,7 +24,6 @@ use sgpe::rk4;
 use sgpe::types::*;
 use sgpe::utils::*;
 
-use rand::Rng;
 
 /// Generates an initial state with low-amplitude complex noise to represent a thermal field.
 fn generate_initial_state(gridpoints: (usize, usize)) -> Array2<Complex<f64>> {
@@ -107,12 +106,6 @@ fn main() {
     // Select the atomic species for the simulation (Rb-87 in this case)
     let atomic_species = &rb87;
 
-    // Create a random generator for trap frequency offsets
-    // This allows for slight variations in the trapping potential between simulations
-    let mut rng = rand::thread_rng();
-    let _offset_x: f64 = rng.gen_range(-2.0..=2.0);
-    let _offset_y: f64 = rng.gen_range(-2.0..=2.0);
-
     // Define a harmonic trap
     // The potential is given by V(r) = 1/2 * m * (ωx^2 * x^2 + ωy^2 * y^2 + ωz^2 * z^2)
     let trap = Trap {
@@ -159,11 +152,7 @@ fn main() {
 
     // Calculate interaction strength
     // g = 4πℏ^2a_s/m, where a_s is the s-wave scattering length
-    let interaction_strength = condensate.interaction_strength(
-        atomic_species.atomic_mass,
-        scalings.length_z,
-        trap.frequency_x,
-    );
+    let interaction_strength = condensate.interaction_strength(scalings.length_z);
 
     // Set up simulation parameters
     let mut simulation = Simulation {
@@ -275,7 +264,6 @@ fn main() {
             let _phi = rk4::runge_kutta_2d(
                 0.0,         // Initial time
                 initial_phi, // Initial thermal field
-                &(run_id as isize),
                 &noise_magnitude,
                 &interaction_strength,
                 &simulation,
@@ -284,8 +272,6 @@ fn main() {
                 &x,
                 &y,
                 &k_sq_clone,
-                chemical_potential,
-                temperature,
                 save_full_trajectory,
                 &run_dir,
             );
