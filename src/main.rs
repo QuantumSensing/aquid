@@ -33,11 +33,11 @@ fn generate_initial_state(gridpoints: (usize, usize)) -> Array2<Complex<f64>> {
     // The initial amplitude should be small, representing quantum fluctuations.
     let initial_amplitude = 1e-5;
     Array2::from_shape_fn(gridpoints, |_| {
-        let re = <StandardNormal as Distribution<f64>>::sample(&dist, &mut rng) as f64
+        let re = <StandardNormal as Distribution<f64>>::sample(&dist, &mut rng)
             * initial_amplitude;
-        let im = <StandardNormal as Distribution<f64>>::sample(&dist, &mut rng) as f64
+        let im = <StandardNormal as Distribution<f64>>::sample(&dist, &mut rng)
             * initial_amplitude;
-        Complex::new(0.0, 0.0)
+        Complex::new(re, im)
     })
 }
 
