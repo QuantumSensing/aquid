@@ -393,3 +393,131 @@ pub fn runge_kutta_2d(
 
     y
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ndarray::Array1;
+
+    fn test_trap() -> Trap {
+        Trap {
+            trap_type: TrapType::Harmonic,
+            frequency_x: 2.0 * PI * 25.0,
+            frequency_y: 2.0 * PI * 25.0,
+            frequency_z: 2.0 * PI * 100.0,
+            depth: None,
+            ring_radius: None,
+            trap_radius: None,
+        }
+    }
+
+    fn test_x() -> Array1<f64> {
+        Array1::linspace(-10.0, 10.0, 33)
+    }
+
+    fn test_y() -> Array1<f64> {
+        Array1::linspace(-10.0, 10.0, 33)
+    }
+
+    #[test]
+    fn harmonic_potential_at_origin_is_zero() {
+        let trap = test_trap();
+        let x = test_x();
+        let y = test_y();
+        let v = harmonic_potential(&x, &y, &trap);
+        // With 33 points, the midpoint index 16 is exactly 0.0
+        let mid = 16;
+        let val = v[[mid, mid]].re;
+        assert!(val.abs() < 1e-10, "V(0,0) = {} should be ~0", val);
+    }
+
+    #[test]
+    fn harmonic_potential_is_positive() {
+        let trap = test_trap();
+        let x = test_x();
+        let y = test_y();
+        let v = harmonic_potential(&x, &y, &trap);
+        assert!(v.iter().all(|c| c.re >= 0.0));
+    }
+
+    #[test]
+    fn wiener_noise_correct_shape() {
+        let gp = (64, 64);
+        let noise = generate_wiener_noise(&gp);
+        assert_eq!(noise.shape(), &[64, 64]);
+    }
+
+    #[test]
+    fn wiener_noise_zero_mean() {
+        let gp = (128, 128);
+        let noise = generate_wiener_noise(&gp);
+        let mean = noise.mean().unwrap();
+        // Standard normal should have mean ≈ 0 with std err ~ 1/sqrt(N)
+        assert!(mean.abs() < 0.02, "mean = {} should be ~0", mean);
+    }
+
+    #[test]
+    fn wiener_noise_unit_variance() {
+        let gp = (128, 128);
+        let noise = generate_wiener_noise(&gp);
+        let mean = noise.mean().unwrap();
+        let var = noise.mapv(|v| (v - mean).powi(2)).mean().unwrap();
+        assert!((var - 1.0).abs() < 0.05, "variance = {} should be ~1", var);
+    }
+
+    #[test]
+    fn phase_noise_in_unit_interval() {
+        let gp = (64, 64);
+        let noise = generate_phase_noise(&gp);
+        assert!(noise.iter().all(|&v| (0.0..=1.0).contains(&v)));
+    }
+
+    #[test]
+    fn calculate_noise_correct_shape() {
+        let gp = (64, 64);
+        let wiener = generate_wiener_noise(&gp);
+        let phase = generate_phase_noise(&gp);
+        let noise = calculate_noise(1.0, &wiener, &phase);
+        assert_eq!(noise.shape(), &[64, 64]);
+    }
+
+    #[test]
+    fn rk4_step_preserves_shape() {
+        let gp = (33, 33);
+        let y = Array2::from_elem(gp, Complex::new(0.1, 0.0));
+        let trap = test_trap();
+        let x = test_x();
+        let y_coords = test_y();
+        let potential = calculate_potential(&x, &y_coords, &trap);
+        let condensate = Condensate {
+            temperature: 0.5,
+            gamma: 0.1,
+            scattering_length: 100.0 * BOHR_RADIUS,
+            chemical_potential: 1.0,
+        };
+        let kx = Array1::from_shape_fn(gp.0, |i| {
+            let f = i as f64 / (gp.0 as f64);
+            if i > gp.0 / 2 { f - 1.0 } else { f }
+        } * 2.0 * PI);
+        let ky = Array1::from_shape_fn(gp.1, |i| {
+            let f = i as f64 / (gp.1 as f64);
+            if i > gp.1 / 2 { f - 1.0 } else { f }
+        } * 2.0 * PI);
+        let kx_sq = kx.mapv(|v| v.powi(2));
+        let ky_sq = ky.mapv(|v| v.powi(2));
+        let k_sq = kx_sq.into_shape((gp.0, 1)).unwrap() + ky_sq;
+
+        let result = runge_kutta_step_2d(
+            &y,
+            &0.001,
+            &gp,
+            0.01,
+            &1.0,
+            &potential,
+            &condensate,
+            &k_sq,
+        );
+
+        assert_eq!(result.shape(), &[33, 33]);
+    }
+}

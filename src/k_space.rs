@@ -49,3 +49,44 @@ pub fn generate_k_space(simulation: &Simulation) -> (Array1<f64>, Array1<f64>, A
 
     (kx, ky, k_sq)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::Simulation;
+
+    fn test_simulation() -> Simulation {
+        Simulation {
+            grid_size: 100e-6,
+            gridpoints: (64, 64),
+            step_size: (100e-6 / 64.0, 100e-6 / 64.0),
+            timesteps: 10,
+            timestep: 1e-3,
+            runs: 1,
+            noise_realisations: 1,
+        }
+    }
+
+    #[test]
+    fn k_space_correct_shape() {
+        let sim = test_simulation();
+        let (kx, ky, k_sq) = generate_k_space(&sim);
+        assert_eq!(kx.len(), 64);
+        assert_eq!(ky.len(), 64);
+        assert_eq!(k_sq.shape(), &[64, 64]);
+    }
+
+    #[test]
+    fn k_sq_is_nonnegative() {
+        let sim = test_simulation();
+        let (_, _, k_sq) = generate_k_space(&sim);
+        assert!(k_sq.iter().all(|&v| v >= 0.0));
+    }
+
+    #[test]
+    fn k_sq_zero_mode_is_zero() {
+        let sim = test_simulation();
+        let (_, _, k_sq) = generate_k_space(&sim);
+        assert!((k_sq[[0, 0]]).abs() < 1e-12);
+    }
+}
