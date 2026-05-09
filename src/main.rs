@@ -168,14 +168,14 @@ fn main() {
     // Calculate the spatial step size
     simulation.step_size = (
         simulation.grid_size / simulation.gridpoints.0 as f64,
-        simulation.grid_size / simulation.gridpoints.0 as f64,
+        simulation.grid_size / simulation.gridpoints.1 as f64,
     );
 
     // Check CFL (Courant-Friedrichs-Lewy) condition
     // This condition ensures numerical stability of the simulation
     assert!(
         simulation.timestep < 0.5 * simulation.step_size.0,
-        "CFL condition violated. Check that dx < 0.5 (dt)^2."
+        "CFL condition violated: timestep must be less than 0.5 * step_size."
     );
 
     // Initialize simulation grid
