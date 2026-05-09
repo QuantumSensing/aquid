@@ -222,7 +222,7 @@ fn main() {
     if let Err(e) = write_params(
         &rb87,
         &rb85,
-        &atomic_species,
+        atomic_species,
         &trap,
         &scalings,
         &condensate,

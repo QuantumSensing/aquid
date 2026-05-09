@@ -248,26 +248,26 @@ pub fn runge_kutta_step_2d(
     // Calculate the final noise array
     let noise: Array2<Complex<f64>> = calculate_noise(noise_magnitude, &wiener_noise, &phase_noise);
 
-    let k1 = sgpe(y, &potential, &interaction_strength, &condensate, k_sq);
+    let k1 = sgpe(y, potential, interaction_strength, condensate, k_sq);
     let k2 = sgpe(
         &(y + Complex::new(h / 2.0, 0.0) * &k1),
-        &potential,
-        &interaction_strength,
-        &condensate,
+        potential,
+        interaction_strength,
+        condensate,
         k_sq,
     );
     let k3 = sgpe(
         &(y + Complex::new(h / 2.0, 0.0) * &k2),
-        &potential,
-        &interaction_strength,
-        &condensate,
+        potential,
+        interaction_strength,
+        condensate,
         k_sq,
     );
     let k4 = sgpe(
         &(y + Complex::new(h / 1.0, 0.0) * &k3),
-        &potential,
-        &interaction_strength,
-        &condensate,
+        potential,
+        interaction_strength,
+        condensate,
         k_sq,
     );
 
