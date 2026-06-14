@@ -56,6 +56,9 @@ pub fn generate_k_space(simulation: &Simulation) -> (Array1<f64>, Array1<f64>, A
 /// largest physically retained wavenumber (typically the projector cutoff).
 /// This is twice as strict as the naive Nyquist bound \(dx \le \pi/k_{\max}\).
 pub fn check_anti_aliasing(dx: f64, k_cut: f64) -> bool {
+    if !(dx.is_finite() && k_cut.is_finite()) || dx <= 0.0 || k_cut <= 0.0 {
+        return false;
+    }
     dx <= std::f64::consts::PI / (2.0 * k_cut)
 }
 
