@@ -3,69 +3,13 @@
 use super::constants::*;
 use super::types::*;
 use super::utils::*;
+use crate::potential::calculate_potential;
 use ndarray::{Array1, Array2};
 use num_complex::Complex;
 use rand_distr::{Distribution, StandardNormal};
 use rustfft::FftPlanner;
 use std::path::Path;
 use std::sync::OnceLock;
-
-/// Calculates the harmonic potential in dimensionless units.
-///
-/// The coordinates \(x, y\) are scaled by \(\ell_x = \sqrt{\hbar/(m\omega_x)}\), so the
-/// dimensionless harmonic potential is
-/// \[
-/// \tilde{V}(\tilde x,\tilde y) = \frac{1}{2}\tilde x^2 + \frac{1}{2}\left(\frac{\omega_y}{\omega_x}\right)^2 \tilde y^2 .
-/// \]
-/// Energy is in units of \(\hbar\omega_x\).
-pub fn harmonic_potential(x: &Array1<f64>, y: &Array1<f64>, trap: &Trap) -> Array2<Complex<f64>> {
-    let aspect_ratio_y = trap.frequency_y / trap.frequency_x;
-
-    let potential_x = 0.5 * x.mapv(|x| x.powi(2)).into_shape((x.len(), 1)).unwrap();
-    let potential_y =
-        0.5 * aspect_ratio_y.powi(2) * y.mapv(|y| y.powi(2)).into_shape((1, y.len())).unwrap();
-
-    let potential = potential_x + potential_y;
-    potential.mapv(|val| Complex::new(val, 0.0))
-}
-
-/// Calculates the toroidal potential.
-///
-/// [V(r) = V_0(1 - e^{-\frac{(r-R)^2}{2\sigma^2}})]
-pub fn toroidal_potential(x: &Array1<f64>, y: &Array1<f64>, trap: &Trap) -> Array2<Complex<f64>> {
-    // Unwrap the toroidal trap parameters
-    let depth = trap.depth.expect("Depth is required for a toroidal trap");
-    let ring_radius = trap
-        .ring_radius
-        .expect("Ring radius is required for a toroidal trap");
-    let trap_radius = trap
-        .trap_radius
-        .expect("Trap radius is required for a toroidal trap");
-
-    // Create a grid of x and y values
-    let x_grid = x.broadcast((y.len(), x.len())).unwrap();
-    let y_grid = y.broadcast((x.len(), y.len())).unwrap().reversed_axes();
-
-    // Compute rho for each pair in the grid
-    let rho = (&x_grid * &x_grid + &y_grid * &y_grid).mapv(f64::sqrt);
-
-    // Compute the potential using the given equation
-    let potential = depth
-        * (1.0
-            - (-1.0 / trap_radius.powi(2) * (&rho - ring_radius).mapv(|rho_r| rho_r.powi(2)))
-                .mapv(f64::exp));
-
-    // Convert the potential to Complex<f64>
-    potential.mapv(|val| Complex::new(val, 0.0))
-}
-
-/// Selects and calculates the appropriate potential based on trap type.
-pub fn calculate_potential(x: &Array1<f64>, y: &Array1<f64>, trap: &Trap) -> Array2<Complex<f64>> {
-    match trap.trap_type {
-        TrapType::Harmonic | TrapType::Cigar => harmonic_potential(x, y, trap),
-        TrapType::Toroidal => toroidal_potential(x, y, trap),
-    }
-}
 
 fn debug_io_enabled() -> bool {
     static FLAG: OnceLock<bool> = OnceLock::new();
@@ -418,27 +362,6 @@ mod tests {
     }
 
     #[test]
-    fn harmonic_potential_at_origin_is_zero() {
-        let trap = test_trap();
-        let x = test_x();
-        let y = test_y();
-        let v = harmonic_potential(&x, &y, &trap);
-        // With 33 points, the midpoint index 16 is exactly 0.0
-        let mid = 16;
-        let val = v[[mid, mid]].re;
-        assert!(val.abs() < 1e-10, "V(0,0) = {} should be ~0", val);
-    }
-
-    #[test]
-    fn harmonic_potential_is_positive() {
-        let trap = test_trap();
-        let x = test_x();
-        let y = test_y();
-        let v = harmonic_potential(&x, &y, &trap);
-        assert!(v.iter().all(|c| c.re >= 0.0));
-    }
-
-    #[test]
     fn wiener_noise_correct_shape() {
         let gp = (64, 64);
         let noise = generate_wiener_noise(&gp);
@@ -509,67 +432,5 @@ mod tests {
             runge_kutta_step_2d(&y, &0.001, &gp, 0.01, &1.0, &potential, &condensate, &k_sq);
 
         assert_eq!(result.shape(), &[33, 33]);
-    }
-
-    #[test]
-    fn harmonic_potential_is_real() {
-        let trap = test_trap();
-        let x = test_x();
-        let y = test_y();
-        let v = harmonic_potential(&x, &y, &trap);
-        assert!(
-            v.iter().all(|c| c.im.abs() < 1e-15),
-            "harmonic potential should be purely real"
-        );
-    }
-
-    #[test]
-    fn harmonic_potential_isotropic_when_omega_y_equals_omega_x() {
-        let trap = test_trap(); // frequency_y == frequency_x == 2*PI*25
-        let x = test_x();
-        let y = test_y();
-        let v = harmonic_potential(&x, &y, &trap);
-
-        let step = 20.0 / 32.0; // linspace(-10, 10, 33)
-        let idx_of = |val: f64| -> usize { ((val + 10.0) / step).round() as usize };
-
-        let mid = idx_of(0.0);
-        let i = idx_of(5.0);
-        // V(x, 0) should equal V(0, x) when omega_y == omega_x
-        let v_x0 = v[[i, mid]].re;
-        let v_0x = v[[mid, i]].re;
-        let rel_diff = (v_x0 - v_0x).abs() / v_x0;
-        assert!(
-            rel_diff < 1e-10,
-            "V({:.3}, 0) = {} != V(0, {:.3}) = {}",
-            x[i],
-            v_x0,
-            y[i],
-            v_0x
-        );
-    }
-
-    #[test]
-    fn harmonic_potential_grows_quadratically() {
-        let trap = test_trap();
-        let x = test_x();
-        let y = test_y();
-        let v = harmonic_potential(&x, &y, &trap);
-
-        let step = 20.0 / 32.0;
-        let idx_of = |val: f64| -> usize { ((val + 10.0) / step).round() as usize };
-
-        let mid = idx_of(0.0);
-        let i1 = idx_of(2.5);
-        let i2 = idx_of(5.0);
-        // V(2 * x, 0) should equal 4 * V(x, 0) for a harmonic potential
-        let v1 = v[[i1, mid]].re;
-        let v2 = v[[i2, mid]].re;
-        let ratio = v2 / v1;
-        assert!(
-            (ratio - 4.0).abs() < 1e-10,
-            "V(5.0) / V(2.5) = {}, expected 4.0",
-            ratio
-        );
     }
 }
