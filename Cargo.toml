@@ -1,3 +1,26 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:5d06618ea5dccc10c84e85071db21e357688712d977719600ee031835f0dddf0
-size 614
+[package]
+name = "aquid"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+keywords = ["atomtronics", "josephson", "squid", "quantum-interference", "bec"]
+categories = ["science", "algorithms"]
+authors = ["Jack Griffiths <me@jackg.co>"]
+description = "Simulation of an atomtronic quantum interference device in a 2D trapped toroidal geometry with two weak-link lasers, demonstrating Josephson effects and quantum interference of critical currents."
+readme = "README.md"
+homepage = "https://jackg.co"
+repository = "https://github.com/QuantumSensing/aquid"
+
+[dependencies]
+ndarray = "0.15.6"
+ndarray-rand = "0.14.0"
+num-complex = "0.4.3"
+rand = "0.8.5"
+rayon = "1.7.0"
+num-traits = "0.2.15"
+num = "0.4.0"
+rand_distr = "0.4.3"
+rustfft = "6.1.0"
+
+[lints.clippy]
+too_many_arguments = "allow"

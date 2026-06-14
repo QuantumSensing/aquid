@@ -1,9 +1,28 @@
-/target
+# Environment
+.env
+
+# Output (regenerable)
+plots/
+notes/
+literature/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Rust
+target/
+# Cargo.lock is committed — this is a binary crate, not a library
+
+# Project outputs
 *.err
 *.out
 /output/*
-*.npy
 job_locks/
 logs/
-data/
 output.tmp

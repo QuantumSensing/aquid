@@ -507,16 +507,8 @@ mod tests {
         let ky_sq = ky.mapv(|v| v.powi(2));
         let k_sq = kx_sq.into_shape((gp.0, 1)).unwrap() + ky_sq;
 
-        let result = runge_kutta_step_2d(
-            &y,
-            &0.001,
-            &gp,
-            0.01,
-            &1.0,
-            &potential,
-            &condensate,
-            &k_sq,
-        );
+        let result =
+            runge_kutta_step_2d(&y, &0.001, &gp, 0.01, &1.0, &potential, &condensate, &k_sq);
 
         assert_eq!(result.shape(), &[33, 33]);
     }

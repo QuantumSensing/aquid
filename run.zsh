@@ -17,7 +17,7 @@ from typing import Iterable, Tuple
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Launch SGPE simulations in parallel.")
     parser.add_argument("--mode", choices=["full", "final"], default="final")
-    parser.add_argument("--program", default="./target/release/sgpe")
+    parser.add_argument("--program", default="./target/release/aquid")
     parser.add_argument("--count", type=int, default=16)
     parser.add_argument("--seed", type=int, default=42069)
     parser.add_argument("--noise", "--noise-realisations", type=int, dest="noise_realisations", default=1)

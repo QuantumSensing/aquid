@@ -18,12 +18,11 @@ use rayon::prelude::*;
 use std::env;
 use std::path::Path;
 
-use sgpe::constants::*;
-use sgpe::k_space::*;
-use sgpe::rk4;
-use sgpe::types::*;
-use sgpe::utils::*;
-
+use aquid::constants::*;
+use aquid::k_space::*;
+use aquid::rk4;
+use aquid::types::*;
+use aquid::utils::*;
 
 /// Generates an initial state with low-amplitude complex noise to represent a thermal field.
 fn generate_initial_state(gridpoints: (usize, usize)) -> Array2<Complex<f64>> {
@@ -32,10 +31,8 @@ fn generate_initial_state(gridpoints: (usize, usize)) -> Array2<Complex<f64>> {
     // The initial amplitude should be small, representing quantum fluctuations.
     let initial_amplitude = 1e-5;
     Array2::from_shape_fn(gridpoints, |_| {
-        let re = <StandardNormal as Distribution<f64>>::sample(&dist, &mut rng)
-            * initial_amplitude;
-        let im = <StandardNormal as Distribution<f64>>::sample(&dist, &mut rng)
-            * initial_amplitude;
+        let re = <StandardNormal as Distribution<f64>>::sample(&dist, &mut rng) * initial_amplitude;
+        let im = <StandardNormal as Distribution<f64>>::sample(&dist, &mut rng) * initial_amplitude;
         Complex::new(re, im)
     })
 }
@@ -157,8 +154,8 @@ fn main() {
     // Set up simulation parameters
     let mut simulation = Simulation {
         grid_size: 100e-6 / scalings.length_x, // Size of the simulation box in scaled units
-        gridpoints: (256, 256),                 // Number of grid points in each dimension
-        step_size: (0.0, 0.0),                // Will be calculated later
+        gridpoints: (256, 256),                // Number of grid points in each dimension
+        step_size: (0.0, 0.0),                 // Will be calculated later
         timesteps: 6_000, // Number of time steps in the simulation (T ≈ 6 units)
         timestep: 1.0e-3, // Size of each time step in scaled units
         runs: 1_000,      // Number of independent runs (not used in this script)
