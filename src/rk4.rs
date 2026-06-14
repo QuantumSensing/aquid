@@ -10,24 +10,22 @@ use rustfft::FftPlanner;
 use std::path::Path;
 use std::sync::OnceLock;
 
-/// Calculates the harmonic potential.
+/// Calculates the harmonic potential in dimensionless units.
 ///
-/// [V(x,y) = \frac{1}{2}m(\omega_x^2 x^2 + \omega_y^2 y^2)]
+/// The coordinates \(x, y\) are scaled by \(\ell_x = \sqrt{\hbar/(m\omega_x)}\), so the
+/// dimensionless harmonic potential is
+/// \[
+/// \tilde{V}(\tilde x,\tilde y) = \frac{1}{2}\tilde x^2 + \frac{1}{2}\left(\frac{\omega_y}{\omega_x}\right)^2 \tilde y^2 .
+/// \]
+/// Energy is in units of \(\hbar\omega_x\).
 pub fn harmonic_potential(x: &Array1<f64>, y: &Array1<f64>, trap: &Trap) -> Array2<Complex<f64>> {
-    // Calculate aspect ratios
-    let aspect_ratio_x = trap.frequency_x / trap.frequency_z;
-    let aspect_ratio_y = trap.frequency_y / trap.frequency_z;
+    let aspect_ratio_y = trap.frequency_y / trap.frequency_x;
 
-    // Compute the potential using broadcasting
-    let potential_x =
-        0.5 * aspect_ratio_x.powi(2) * x.mapv(|x| x.powi(2)).into_shape((x.len(), 1)).unwrap();
+    let potential_x = 0.5 * x.mapv(|x| x.powi(2)).into_shape((x.len(), 1)).unwrap();
     let potential_y =
         0.5 * aspect_ratio_y.powi(2) * y.mapv(|y| y.powi(2)).into_shape((1, y.len())).unwrap();
 
-    // Combine x and y potentials
     let potential = potential_x + potential_y;
-
-    // Convert the combined potential to Complex<f64>
     potential.mapv(|val| Complex::new(val, 0.0))
 }
 
@@ -511,5 +509,67 @@ mod tests {
             runge_kutta_step_2d(&y, &0.001, &gp, 0.01, &1.0, &potential, &condensate, &k_sq);
 
         assert_eq!(result.shape(), &[33, 33]);
+    }
+
+    #[test]
+    fn harmonic_potential_is_real() {
+        let trap = test_trap();
+        let x = test_x();
+        let y = test_y();
+        let v = harmonic_potential(&x, &y, &trap);
+        assert!(
+            v.iter().all(|c| c.im.abs() < 1e-15),
+            "harmonic potential should be purely real"
+        );
+    }
+
+    #[test]
+    fn harmonic_potential_isotropic_when_omega_y_equals_omega_x() {
+        let trap = test_trap(); // frequency_y == frequency_x == 2*PI*25
+        let x = test_x();
+        let y = test_y();
+        let v = harmonic_potential(&x, &y, &trap);
+
+        let step = 20.0 / 32.0; // linspace(-10, 10, 33)
+        let idx_of = |val: f64| -> usize { ((val + 10.0) / step).round() as usize };
+
+        let mid = idx_of(0.0);
+        let i = idx_of(5.0);
+        // V(x, 0) should equal V(0, x) when omega_y == omega_x
+        let v_x0 = v[[i, mid]].re;
+        let v_0x = v[[mid, i]].re;
+        let rel_diff = (v_x0 - v_0x).abs() / v_x0;
+        assert!(
+            rel_diff < 1e-10,
+            "V({:.3}, 0) = {} != V(0, {:.3}) = {}",
+            x[i],
+            v_x0,
+            y[i],
+            v_0x
+        );
+    }
+
+    #[test]
+    fn harmonic_potential_grows_quadratically() {
+        let trap = test_trap();
+        let x = test_x();
+        let y = test_y();
+        let v = harmonic_potential(&x, &y, &trap);
+
+        let step = 20.0 / 32.0;
+        let idx_of = |val: f64| -> usize { ((val + 10.0) / step).round() as usize };
+
+        let mid = idx_of(0.0);
+        let i1 = idx_of(2.5);
+        let i2 = idx_of(5.0);
+        // V(2 * x, 0) should equal 4 * V(x, 0) for a harmonic potential
+        let v1 = v[[i1, mid]].re;
+        let v2 = v[[i2, mid]].re;
+        let ratio = v2 / v1;
+        assert!(
+            (ratio - 4.0).abs() < 1e-10,
+            "V(5.0) / V(2.5) = {}, expected 4.0",
+            ratio
+        );
     }
 }
