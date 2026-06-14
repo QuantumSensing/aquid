@@ -89,4 +89,30 @@ mod tests {
         let (_, _, k_sq) = generate_k_space(&sim);
         assert!((k_sq[[0, 0]]).abs() < 1e-12);
     }
+
+    #[test]
+    fn kx_max_equals_nyquist_frequency() {
+        let sim = test_simulation();
+        let (kx, ky, _) = generate_k_space(&sim);
+        let dx = sim.step_size.0;
+        let dy = sim.step_size.1;
+        let expected_kx_max = std::f64::consts::PI / dx;
+        let expected_ky_max = std::f64::consts::PI / dy;
+        let kx_max_abs = kx.iter().map(|k| k.abs()).fold(0.0_f64, f64::max);
+        let ky_max_abs = ky.iter().map(|k| k.abs()).fold(0.0_f64, f64::max);
+        let rel_err_x = (kx_max_abs - expected_kx_max).abs() / expected_kx_max;
+        let rel_err_y = (ky_max_abs - expected_ky_max).abs() / expected_ky_max;
+        assert!(
+            rel_err_x < 1e-10,
+            "max |kx| = {:.6e}, expected pi/dx = {:.6e}",
+            kx_max_abs,
+            expected_kx_max
+        );
+        assert!(
+            rel_err_y < 1e-10,
+            "max |ky| = {:.6e}, expected pi/dy = {:.6e}",
+            ky_max_abs,
+            expected_ky_max
+        );
+    }
 }

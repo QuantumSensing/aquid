@@ -91,7 +91,7 @@ fn main() {
     }
 
     // Initialize atomic species
-    // Here we define the properties of Rubidium-87 and Rubidium-85
+    // Here we define the properties of rubidium-87 and rubidium-85
     let rb87 = Species {
         atomic_mass: 86.9092 * ATOMIC_MASS_UNIT,
     };
@@ -100,7 +100,7 @@ fn main() {
         atomic_mass: 84.9117 * ATOMIC_MASS_UNIT,
     };
 
-    // Select the atomic species for the simulation (Rb-87 in this case)
+    // Select the atomic species for the simulation (rubidium-87 in this case)
     let atomic_species = &rb87;
 
     // Define a harmonic trap
@@ -109,42 +109,30 @@ fn main() {
         trap_type: TrapType::Harmonic,
         frequency_x: 2.0 * PI * 25.0,  // ωx = 2π * 25 Hz
         frequency_y: 2.0 * PI * 25.0,  // ωy = 2π * 25 Hz
-        frequency_z: 2.0 * PI * 100.0, // ωz = 2π * 600 Hz (tight confinement in z-direction)
+        frequency_z: 2.0 * PI * 100.0, // ωz = 2π * 100 Hz (tight confinement in z-direction)
         depth: None,                   //Some(1.0),
         ring_radius: None,             //Some(1.0),
         trap_radius: None,             //Some(1.0),
     };
 
-    // Calculate scaling factors
-    // These factors are used to non-dimensionalize the SGPE
-    let scalings = Scalings {
-        temperature: BOLTZMANN_CONSTANT / (REDUCED_PLANCK_CONSTANT * trap.frequency_x),
-        length_x: (REDUCED_PLANCK_CONSTANT / (atomic_species.atomic_mass * trap.frequency_x))
-            .sqrt(),
-        length_y: (REDUCED_PLANCK_CONSTANT / (atomic_species.atomic_mass * trap.frequency_x))
-            .sqrt(),
-        length_z: (REDUCED_PLANCK_CONSTANT / (atomic_species.atomic_mass * trap.frequency_z))
-            .sqrt(),
-        time: trap.frequency_x,
-        chemical_potential: 1.0 / (REDUCED_PLANCK_CONSTANT * trap.frequency_x),
-    };
+    // Calculate scaling factors from harmonic oscillator units
+    let scalings = Scalings::new(atomic_species, &trap);
 
     // Set trap parameters
     // These parameters are used for more complex trap geometries (e.g., toroidal traps)
-    // trap.depth = Some(60e-9 * scalings.temperature);
+    // trap.depth = Some(60e-9 * scalings.temperature_scale);
     // trap.ring_radius = Some(40e-6 / scalings.length_x);
     // trap.trap_radius = Some(20e-6 / scalings.length_x);
 
     // Set up condensate parameters
     // These parameters define the properties of the Bose-Einstein condensate
     let condensate = Condensate {
-        temperature: temperature * 1e-9 * scalings.temperature,
+        temperature: scalings.dimensionless_temperature(temperature * 1e-9),
         gamma: 0.1,                             // Dimensionless damping parameter
         scattering_length: 100.0 * BOHR_RADIUS, // s-wave scattering length
-        chemical_potential: chemical_potential
-            * REDUCED_PLANCK_CONSTANT
-            * trap.frequency_x
-            * scalings.chemical_potential,
+        chemical_potential: scalings.dimensionless_chemical_potential(
+            chemical_potential * REDUCED_PLANCK_CONSTANT * trap.frequency_x,
+        ),
     };
 
     // Calculate interaction strength
@@ -162,10 +150,11 @@ fn main() {
         noise_realisations: noise_realisations as i64, // Number of stochastic realisations
     };
 
-    // Calculate the spatial step size
+    // Calculate the spatial step size.
+    // The grid spans [-L, L] so the physical extent is 2L.
     simulation.step_size = (
-        simulation.grid_size / simulation.gridpoints.0 as f64,
-        simulation.grid_size / simulation.gridpoints.1 as f64,
+        2.0 * simulation.grid_size / simulation.gridpoints.0 as f64,
+        2.0 * simulation.grid_size / simulation.gridpoints.1 as f64,
     );
 
     // Check CFL (Courant-Friedrichs-Lewy) condition

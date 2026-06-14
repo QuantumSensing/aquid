@@ -1,11 +1,6 @@
 # Environment
 .env
 
-# Output (regenerable)
-plots/
-notes/
-literature/
-
 # Editors
 .vscode/
 .idea/

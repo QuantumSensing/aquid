@@ -185,15 +185,19 @@ pub fn write_params(
     writeln!(writer, "trap frequency_z: {:.4e}", trap.frequency_z)?;
     writeln!(writer, "trap depth: {:.4e}", trap.depth.unwrap_or(0.0))?;
 
-    writeln!(writer, "scalings temperature: {:.4e}", scalings.temperature)?;
+    writeln!(
+        writer,
+        "scalings temperature_scale: {:.4e}",
+        scalings.temperature_scale
+    )?;
     writeln!(writer, "scalings length_x: {:.4e}", scalings.length_x)?;
     writeln!(writer, "scalings length_y: {:.4e}", scalings.length_y)?;
     writeln!(writer, "scalings length_z: {:.4e}", scalings.length_z)?;
-    writeln!(writer, "scalings time: {:.4e}", scalings.time)?;
+    writeln!(writer, "scalings time_unit: {:.4e}", scalings.time_unit)?;
     writeln!(
         writer,
-        "scalings chemical potential: {:.4e}",
-        scalings.chemical_potential
+        "scalings chemical_potential_scale: {:.4e}",
+        scalings.chemical_potential_scale
     )?;
 
     writeln!(
