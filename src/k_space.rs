@@ -50,16 +50,30 @@ pub fn generate_k_space(simulation: &Simulation) -> (Array1<f64>, Array1<f64>, A
     (kx, ky, k_sq)
 }
 
+/// Check the anti-aliasing condition for the cubic nonlinearity.
+///
+/// Blakie et al. require \(dx \le \pi/(2 k_{\max})\) where \(k_{\max}\) is the
+/// largest physically retained wavenumber (typically the projector cutoff).
+/// This is twice as strict as the naive Nyquist bound \(dx \le \pi/k_{\max}\).
+pub fn check_anti_aliasing(dx: f64, k_cut: f64) -> bool {
+    dx <= std::f64::consts::PI / (2.0 * k_cut)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::types::Simulation;
+    use ndarray::Array2;
+    use num_complex::Complex;
+    use rustfft::FftPlanner;
 
     fn test_simulation() -> Simulation {
+        let grid_size = 100e-6;
+        let n = 64.0;
         Simulation {
-            grid_size: 100e-6,
+            grid_size,
             gridpoints: (64, 64),
-            step_size: (100e-6 / 64.0, 100e-6 / 64.0),
+            step_size: (2.0 * grid_size / n, 2.0 * grid_size / n),
             timesteps: 10,
             timestep: 1e-3,
             runs: 1,
@@ -114,5 +128,84 @@ mod tests {
             ky_max_abs,
             expected_ky_max
         );
+    }
+
+    #[test]
+    fn fft_round_trip_normalisation() {
+        // Forward FFT + inverse FFT must recover the original field
+        // up to the 1/(nx*ny) normalisation factor applied on inverse.
+        let (nx, ny) = (32, 32);
+        let mut field = Array2::from_shape_fn((nx, ny), |(i, j)| {
+            let x = (i as f64) - (nx as f64) / 2.0;
+            let y = (j as f64) - (ny as f64) / 2.0;
+            Complex::new((-0.5 * (x * x + y * y)).exp(), 0.0)
+        });
+
+        let original = field.clone();
+
+        let mut planner = FftPlanner::new();
+        let fft1 = planner.plan_fft_forward(ny);
+        let fft0 = planner.plan_fft_forward(nx);
+        let ifft1 = planner.plan_fft_inverse(ny);
+        let ifft0 = planner.plan_fft_inverse(nx);
+
+        // Forward
+        for mut row in field.rows_mut() {
+            if let Some(s) = row.as_slice_mut() {
+                fft1.process(s);
+            }
+        }
+        let mut col_buf = vec![Complex::new(0.0, 0.0); nx];
+        for j in 0..ny {
+            for (i, v) in col_buf.iter_mut().enumerate() {
+                *v = field[[i, j]];
+            }
+            fft0.process(&mut col_buf);
+            for (i, v) in col_buf.iter().enumerate() {
+                field[[i, j]] = *v;
+            }
+        }
+
+        // Inverse
+        for j in 0..ny {
+            for (i, v) in col_buf.iter_mut().enumerate() {
+                *v = field[[i, j]];
+            }
+            ifft0.process(&mut col_buf);
+            for (i, v) in col_buf.iter().enumerate() {
+                field[[i, j]] = *v;
+            }
+        }
+        for mut row in field.rows_mut() {
+            if let Some(s) = row.as_slice_mut() {
+                ifft1.process(s);
+            }
+        }
+
+        let norm = 1.0 / ((nx * ny) as f64);
+        field.mapv_inplace(|v| v * norm);
+
+        let max_err = (&field - &original)
+            .iter()
+            .map(|c| c.norm())
+            .fold(0.0_f64, f64::max);
+        assert!(
+            max_err < 1e-10,
+            "FFT round-trip max error = {:.2e}, expected < 1e-10",
+            max_err
+        );
+    }
+
+    #[test]
+    fn anti_aliasing_bound_check() {
+        // With k_cut at half Nyquist, the condition should pass.
+        let dx = 0.1;
+        let k_nyquist = std::f64::consts::PI / dx;
+        let k_cut = k_nyquist / 2.0;
+        assert!(check_anti_aliasing(dx, k_cut));
+
+        // With k_cut above Nyquist/2, the condition should fail.
+        let k_cut_too_high = k_nyquist * 0.51;
+        assert!(!check_anti_aliasing(dx, k_cut_too_high));
     }
 }
