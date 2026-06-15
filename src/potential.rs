@@ -333,16 +333,8 @@ mod tests {
         //   θ₂ = π + 0 − π = 0
         let config = BarrierConfig::new(0.0, 0.0, 2.0, 2.0, 1.0);
         let (t1, t2) = config.angles_at(1.0);
-        assert!(
-            (t1 - PI).abs() < 1e-10,
-            "theta_1 = {}, expected pi",
-            t1
-        );
-        assert!(
-            t2.abs() < 1e-10,
-            "theta_2 = {}, expected 0",
-            t2
-        );
+        assert!((t1 - PI).abs() < 1e-10, "theta_1 = {}, expected pi", t1);
+        assert!(t2.abs() < 1e-10, "theta_2 = {}, expected 0", t2);
     }
 
     #[test]
@@ -434,9 +426,9 @@ mod tests {
         let step = 40.0 / ((nx - 1) as f64);
         let idx_of = |val: f64| -> usize { ((val + 20.0) / step).round() as usize };
 
-        let idx_x1 = idx_of(ring_radius);   // x-index of +R
-        let idx_x2 = idx_of(-ring_radius);  // x-index of -R
-        let idx_mid = idx_of(0.0);          // index of 0
+        let idx_x1 = idx_of(ring_radius); // x-index of +R
+        let idx_x2 = idx_of(-ring_radius); // x-index of -R
+        let idx_mid = idx_of(0.0); // index of 0
 
         // Barriers centred at (+R, 0) and (−R, 0); evaluate along y = 0
         let v_c1 = v[[idx_x1, idx_mid]].re;
@@ -534,11 +526,7 @@ mod tests {
         let i_y_r = idx_of(10.0);
 
         let val = v[[i_x0, i_y_r]].re;
-        assert!(
-            val.abs() < 1e-10,
-            "V at (0, R) should be ~0, got {}",
-            val
-        );
+        assert!(val.abs() < 1e-10, "V at (0, R) should be ~0, got {}", val);
     }
 
     // --- Barrier peak tests ---
