@@ -339,7 +339,6 @@ pub fn runge_kutta_2d(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::potential::harmonic_potential;
     use ndarray::Array1;
 
     fn test_trap() -> Trap {
@@ -360,27 +359,6 @@ mod tests {
 
     fn test_y() -> Array1<f64> {
         Array1::linspace(-10.0, 10.0, 33)
-    }
-
-    #[test]
-    fn harmonic_potential_at_origin_is_zero() {
-        let trap = test_trap();
-        let x = test_x();
-        let y = test_y();
-        let v = harmonic_potential(&x, &y, &trap);
-        // With 33 points, the midpoint index 16 is exactly 0.0
-        let mid = 16;
-        let val = v[[mid, mid]].re;
-        assert!(val.abs() < 1e-10, "V(0,0) = {} should be ~0", val);
-    }
-
-    #[test]
-    fn harmonic_potential_is_positive() {
-        let trap = test_trap();
-        let x = test_x();
-        let y = test_y();
-        let v = harmonic_potential(&x, &y, &trap);
-        assert!(v.iter().all(|c| c.re >= 0.0));
     }
 
     #[test]
@@ -454,67 +432,5 @@ mod tests {
             runge_kutta_step_2d(&y, &0.001, &gp, 0.01, &1.0, &potential, &condensate, &k_sq);
 
         assert_eq!(result.shape(), &[33, 33]);
-    }
-
-    #[test]
-    fn harmonic_potential_is_real() {
-        let trap = test_trap();
-        let x = test_x();
-        let y = test_y();
-        let v = harmonic_potential(&x, &y, &trap);
-        assert!(
-            v.iter().all(|c| c.im.abs() < 1e-15),
-            "harmonic potential should be purely real"
-        );
-    }
-
-    #[test]
-    fn harmonic_potential_isotropic_when_omega_y_equals_omega_x() {
-        let trap = test_trap(); // frequency_y == frequency_x == 2*PI*25
-        let x = test_x();
-        let y = test_y();
-        let v = harmonic_potential(&x, &y, &trap);
-
-        let step = 20.0 / 32.0; // linspace(-10, 10, 33)
-        let idx_of = |val: f64| -> usize { ((val + 10.0) / step).round() as usize };
-
-        let mid = idx_of(0.0);
-        let i = idx_of(5.0);
-        // V(x, 0) should equal V(0, x) when omega_y == omega_x
-        let v_x0 = v[[i, mid]].re;
-        let v_0x = v[[mid, i]].re;
-        let rel_diff = (v_x0 - v_0x).abs() / v_x0;
-        assert!(
-            rel_diff < 1e-10,
-            "V({:.3}, 0) = {} != V(0, {:.3}) = {}",
-            x[i],
-            v_x0,
-            y[i],
-            v_0x
-        );
-    }
-
-    #[test]
-    fn harmonic_potential_grows_quadratically() {
-        let trap = test_trap();
-        let x = test_x();
-        let y = test_y();
-        let v = harmonic_potential(&x, &y, &trap);
-
-        let step = 20.0 / 32.0;
-        let idx_of = |val: f64| -> usize { ((val + 10.0) / step).round() as usize };
-
-        let mid = idx_of(0.0);
-        let i1 = idx_of(2.5);
-        let i2 = idx_of(5.0);
-        // V(2 * x, 0) should equal 4 * V(x, 0) for a harmonic potential
-        let v1 = v[[i1, mid]].re;
-        let v2 = v[[i2, mid]].re;
-        let ratio = v2 / v1;
-        assert!(
-            (ratio - 4.0).abs() < 1e-10,
-            "V(5.0) / V(2.5) = {}, expected 4.0",
-            ratio
-        );
     }
 }

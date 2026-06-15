@@ -254,6 +254,46 @@ pub fn total_potential(
 mod tests {
     use super::*;
 
+    // --- Test helpers ---
+
+    fn test_trap() -> Trap {
+        Trap {
+            trap_type: TrapType::Harmonic,
+            frequency_x: 2.0 * PI * 25.0,
+            frequency_y: 2.0 * PI * 25.0,
+            frequency_z: 2.0 * PI * 100.0,
+            depth: None,
+            ring_radius: None,
+            trap_radius: None,
+        }
+    }
+
+    fn test_toroidal_trap() -> Trap {
+        Trap {
+            trap_type: TrapType::Toroidal,
+            frequency_x: 2.0 * PI * 25.0,
+            frequency_y: 2.0 * PI * 25.0,
+            frequency_z: 2.0 * PI * 100.0,
+            depth: Some(10.0),
+            ring_radius: Some(10.0),
+            trap_radius: Some(2.0),
+        }
+    }
+
+    fn test_barrier_config() -> BarrierConfig {
+        BarrierConfig::new(0.0, 0.0, 0.0, 1.0, 0.0)
+    }
+
+    fn test_x() -> Array1<f64> {
+        Array1::linspace(-10.0, 10.0, 33)
+    }
+
+    fn test_y() -> Array1<f64> {
+        Array1::linspace(-10.0, 10.0, 33)
+    }
+
+    // --- BarrierConfig tests ---
+
     #[test]
     fn barrier_config_diametrically_opposed() {
         let config = BarrierConfig::new(0.0, 1.0, 1.0, 1.0, 1.0);
@@ -293,16 +333,8 @@ mod tests {
         //   θ₂ = π + 0 − π = 0
         let config = BarrierConfig::new(0.0, 0.0, 2.0, 2.0, 1.0);
         let (t1, t2) = config.angles_at(1.0);
-        assert!(
-            (t1 - PI).abs() < 1e-10,
-            "theta_1 = {}, expected pi",
-            t1
-        );
-        assert!(
-            t2.abs() < 1e-10,
-            "theta_2 = {}, expected 0",
-            t2
-        );
+        assert!((t1 - PI).abs() < 1e-10, "theta_1 = {}, expected pi", t1);
+        assert!(t2.abs() < 1e-10, "theta_2 = {}, expected 0", t2);
     }
 
     #[test]
@@ -394,9 +426,9 @@ mod tests {
         let step = 40.0 / ((nx - 1) as f64);
         let idx_of = |val: f64| -> usize { ((val + 20.0) / step).round() as usize };
 
-        let idx_x1 = idx_of(ring_radius);   // x-index of +R
-        let idx_x2 = idx_of(-ring_radius);  // x-index of -R
-        let idx_mid = idx_of(0.0);          // index of 0
+        let idx_x1 = idx_of(ring_radius); // x-index of +R
+        let idx_x2 = idx_of(-ring_radius); // x-index of -R
+        let idx_mid = idx_of(0.0); // index of 0
 
         // Barriers centred at (+R, 0) and (−R, 0); evaluate along y = 0
         let v_c1 = v[[idx_x1, idx_mid]].re;
@@ -466,5 +498,112 @@ mod tests {
         let y = Array1::linspace(-10.0, 10.0, 32);
         let config = BarrierConfig::new(0.0, 0.0, 0.0, 1.0, 0.0);
         barrier_potential(&x, &y, 0.0, &config, -1.0, 1.0, 10.0);
+    }
+
+    // --- Toroidal trap tests ---
+
+    #[test]
+    fn toroidal_potential_is_nonnegative() {
+        let trap = test_toroidal_trap();
+        let x = test_x();
+        let y = test_y();
+        let v = toroidal_potential(&x, &y, &trap);
+        assert!(v.iter().all(|c| c.re >= 0.0));
+    }
+
+    #[test]
+    fn toroidal_potential_minimum_on_ring() {
+        let trap = test_toroidal_trap();
+        let x = test_x();
+        let y = test_y();
+        let v = toroidal_potential(&x, &y, &trap);
+
+        let step = 20.0 / 32.0;
+        let idx_of = |val: f64| -> usize { ((val + 10.0) / step).round() as usize };
+
+        // v[[i, j]] = V(x[i], y[j]) — on the ring at r = R = 10, V ≈ 0
+        let i_x0 = idx_of(0.0);
+        let i_y_r = idx_of(10.0);
+
+        let val = v[[i_x0, i_y_r]].re;
+        assert!(val.abs() < 1e-10, "V at (0, R) should be ~0, got {}", val);
+    }
+
+    // --- Barrier peak tests ---
+
+    #[test]
+    fn barrier_potential_peak_height() {
+        // Barrier centred on a grid point should produce peak = height.
+        // With ring_radius = 10.0 and theta_1 = 0, barrier 1 is at (10, 0).
+        let x = Array1::linspace(-20.0, 20.0, 65);
+        let y = Array1::linspace(-20.0, 20.0, 65);
+        let config = test_barrier_config(); // theta_1 = 0, theta_2 = π
+        let v = barrier_potential(&x, &y, 0.0, &config, 2.5, 1.5, 10.0);
+
+        let max_val = v.iter().map(|c| c.re).fold(f64::NEG_INFINITY, f64::max);
+        assert!(
+            (max_val - 2.5).abs() < 1e-10,
+            "barrier peak should be U_b = 2.5, got {}",
+            max_val
+        );
+    }
+
+    // --- calculate_potential dispatch ---
+
+    #[test]
+    fn calculate_potential_harmonic_matches_harmonic_potential() {
+        let x = test_x();
+        let y = test_y();
+        let trap = test_trap();
+        let expected = harmonic_potential(&x, &y, &trap);
+        let result = calculate_potential(&x, &y, &trap);
+        assert_eq!(result.shape(), expected.shape());
+        for (r, e) in result.iter().zip(expected.iter()) {
+            assert!((r.re - e.re).abs() < 1e-15, "real part mismatch");
+            assert!((r.im - e.im).abs() < 1e-15, "imag part mismatch");
+        }
+    }
+
+    #[test]
+    fn calculate_potential_toroidal_matches_toroidal_potential() {
+        let x = test_x();
+        let y = test_y();
+        let trap = test_toroidal_trap();
+        let expected = toroidal_potential(&x, &y, &trap);
+        let result = calculate_potential(&x, &y, &trap);
+        assert_eq!(result.shape(), expected.shape());
+        for (r, e) in result.iter().zip(expected.iter()) {
+            assert!((r.re - e.re).abs() < 1e-15, "real part mismatch");
+            assert!((r.im - e.im).abs() < 1e-15, "imag part mismatch");
+        }
+    }
+
+    // --- Shape convention tests ---
+
+    #[test]
+    fn harmonic_potential_shape() {
+        let x = Array1::linspace(-10.0, 10.0, 50);
+        let y = Array1::linspace(-10.0, 10.0, 30);
+        let trap = test_trap();
+        let v = harmonic_potential(&x, &y, &trap);
+        assert_eq!(v.shape(), &[50, 30], "shape should be (nx, ny)");
+    }
+
+    #[test]
+    fn toroidal_potential_shape() {
+        let x = Array1::linspace(-10.0, 10.0, 50);
+        let y = Array1::linspace(-10.0, 10.0, 30);
+        let trap = test_toroidal_trap();
+        let v = toroidal_potential(&x, &y, &trap);
+        assert_eq!(v.shape(), &[50, 30], "shape should be (nx, ny)");
+    }
+
+    #[test]
+    fn barrier_potential_shape() {
+        let x = Array1::linspace(-10.0, 10.0, 50);
+        let y = Array1::linspace(-10.0, 10.0, 30);
+        let config = test_barrier_config();
+        let v = barrier_potential(&x, &y, 0.0, &config, 1.0, 1.0, 10.0);
+        assert_eq!(v.shape(), &[50, 30], "shape should be (nx, ny)");
     }
 }
