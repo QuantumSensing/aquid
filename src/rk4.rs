@@ -20,6 +20,23 @@ fn debug_io_enabled() -> bool {
     })
 }
 
+/// Seeds the initial state from a thermal noise distribution.
+///
+/// Generates \(\psi_0 = A (\xi_1 + i\xi_2) / \sqrt{2}\) where \(\xi_1, \xi_2\)
+/// are independent standard-normal random fields and \(A\) is the amplitude
+/// (typically equal to the noise magnitude from the fluctuation-dissipation
+/// relation).
+pub fn seed_initial_state(gridpoints: (usize, usize), amplitude: f64) -> Array2<Complex<f64>> {
+    let mut rng = rand::thread_rng();
+    let normal = StandardNormal;
+    let norm_factor = amplitude / std::f64::consts::SQRT_2;
+    Array2::from_shape_fn(gridpoints, |_| {
+        let re = <StandardNormal as Distribution<f64>>::sample(&normal, &mut rng) * norm_factor;
+        let im = <StandardNormal as Distribution<f64>>::sample(&normal, &mut rng) * norm_factor;
+        Complex::new(re, im)
+    })
+}
+
 /// Computes the kinetic energy term in Fourier space using a 2D FFT.
 pub fn kinetic_energy_fourier(
     phi: &Array2<Complex<f64>>,
@@ -83,24 +100,154 @@ pub fn kinetic_energy_fourier(
     spectrum
 }
 
+/// Computes the angular momentum operator \(\hat{L}_z\) acting on a wavefunction.
+///
+/// \[
+/// \hat{L}_z \psi = -i (x \partial_y \psi - y \partial_x \psi)
+/// \]
+///
+/// The spatial gradients are computed via FFT:
+/// \(\partial_x \psi = \mathcal{F}^{-1}[i k_x \mathcal{F}[\psi]]\).
+///
+/// # Arguments
+///
+/// * `phi` - Wavefunction \(\psi\) with shape \((n_x, n_y)\).
+/// * `x` - \(x\)-grid coordinates, length \(n_x\).
+/// * `y` - \(y\)-grid coordinates, length \(n_y\).
+/// * `kx` - Wave-vector array in \(x\) direction, length \(n_x\).
+/// * `ky` - Wave-vector array in \(y\) direction, length \(n_y\).
+///
+/// # Returns
+///
+/// Array of shape \((n_x, n_y)\) containing \(\hat{L}_z \psi\).
+pub fn angular_momentum_lz(
+    phi: &Array2<Complex<f64>>,
+    x: &Array1<f64>,
+    y: &Array1<f64>,
+    kx: &Array1<f64>,
+    ky: &Array1<f64>,
+) -> Array2<Complex<f64>> {
+    let (nx, ny) = (phi.shape()[0], phi.shape()[1]);
+
+    let mut planner = FftPlanner::new();
+    let fft_axis1 = planner.plan_fft_forward(ny);
+    let fft_axis0 = planner.plan_fft_forward(nx);
+    let ifft_axis1 = planner.plan_fft_inverse(ny);
+    let ifft_axis0 = planner.plan_fft_inverse(nx);
+
+    // Forward FFT along axis 1 (fast axis / columns).
+    let mut spectrum = phi.clone();
+    for mut row in spectrum.rows_mut() {
+        if let Some(row_slice) = row.as_slice_mut() {
+            fft_axis1.process(row_slice);
+        }
+    }
+
+    // Forward FFT along axis 0 (rows).
+    let mut column = vec![Complex::new(0.0, 0.0); nx];
+    for col_idx in 0..ny {
+        for (row_idx, value) in column.iter_mut().enumerate() {
+            *value = spectrum[[row_idx, col_idx]];
+        }
+        fft_axis0.process(&mut column);
+        for (row_idx, value) in column.iter().enumerate() {
+            spectrum[[row_idx, col_idx]] = *value;
+        }
+    }
+
+    let i = Complex::new(0.0, 1.0);
+
+    // Broadcast kx -> (nx, 1) and ky -> (1, ny) for elementwise multiplication.
+    let ikx = Array2::from_shape_fn((nx, 1), |(idx, _)| i * kx[idx]);
+    let iky = Array2::from_shape_fn((1, ny), |(_, idx)| i * ky[idx]);
+
+    // Gradient in k-space: d/dx -> i*kx, d/dy -> i*ky.
+    let mut dpsi_dx_k = &spectrum * &ikx;
+    let mut dpsi_dy_k = &spectrum * &iky;
+
+    // Inverse FFT of dpsi/dx along axis 0.
+    for col_idx in 0..ny {
+        for (row_idx, value) in column.iter_mut().enumerate() {
+            *value = dpsi_dx_k[[row_idx, col_idx]];
+        }
+        ifft_axis0.process(&mut column);
+        for (row_idx, value) in column.iter().enumerate() {
+            dpsi_dx_k[[row_idx, col_idx]] = *value;
+        }
+    }
+    // Inverse FFT of dpsi/dx along axis 1.
+    for mut row in dpsi_dx_k.rows_mut() {
+        if let Some(row_slice) = row.as_slice_mut() {
+            ifft_axis1.process(row_slice);
+        }
+    }
+
+    // Inverse FFT of dpsi/dy along axis 0.
+    for col_idx in 0..ny {
+        for (row_idx, value) in column.iter_mut().enumerate() {
+            *value = dpsi_dy_k[[row_idx, col_idx]];
+        }
+        ifft_axis0.process(&mut column);
+        for (row_idx, value) in column.iter().enumerate() {
+            dpsi_dy_k[[row_idx, col_idx]] = *value;
+        }
+    }
+    // Inverse FFT of dpsi/dy along axis 1.
+    for mut row in dpsi_dy_k.rows_mut() {
+        if let Some(row_slice) = row.as_slice_mut() {
+            ifft_axis1.process(row_slice);
+        }
+    }
+
+    let norm_factor = 1.0 / ((nx * ny) as f64);
+    dpsi_dx_k.mapv_inplace(|val| val * norm_factor);
+    dpsi_dy_k.mapv_inplace(|val| val * norm_factor);
+
+    // Real-space grid for position operators, broadcast to (nx, ny).
+    let x_grid = Array2::from_shape_fn((nx, 1), |(idx, _)| Complex::new(x[idx], 0.0));
+    let y_grid = Array2::from_shape_fn((1, ny), |(_, idx)| Complex::new(y[idx], 0.0));
+
+    // Lz psi = -i * (x * dpsi/dy - y * dpsi/dx)
+    -i * (&x_grid * &dpsi_dy_k - &y_grid * &dpsi_dx_k)
+}
+
 /// Computes the right-hand side of the SGPE.
 ///
-/// [i\hbar\frac{\partial\psi}{\partial t} = (1-i\gamma)(H\psi - \mu\psi)]
+/// \[
+/// i\hbar\frac{\partial\psi}{\partial t} = (1-i\gamma)\left[-\frac{\hbar^2}{2m}\nabla^2 + V(\mathbf{r}) + g|\psi|^2 - \mu - \Omega \hat{L}_z\right]\psi + \eta(\mathbf{r},t)
+/// \]
+///
+/// The rotation term \(-\Omega \hat{L}_z\psi\) and the optional thermal-cloud
+/// Hartree-Fock term \(2g \tilde{n}(\mathbf{r})\) are added inside the
+/// \((1-i\gamma)\) factor.
 pub fn sgpe(
     phi: &Array2<Complex<f64>>,
     potential: &Array2<Complex<f64>>,
     interaction_strength: &f64,
     condensate: &Condensate,
     k_sq: &Array2<f64>,
+    omega_rotation: f64,
+    lz_psi: &Array2<Complex<f64>>,
+    thermal_cloud_density: Option<&Array2<f64>>,
 ) -> Array2<Complex<f64>> {
     let i = Complex::new(0.0, 1.0);
 
     let kinetic = kinetic_energy_fourier(phi, k_sq);
     let interaction = phi.mapv(|p| interaction_strength * p.norm_sqr());
 
+    // Build effective potential including optional Hartree-Fock thermal cloud term.
+    let effective_potential = match thermal_cloud_density {
+        Some(n_tilde) => {
+            let hf_term = (2.0 * interaction_strength * n_tilde).mapv(|v| Complex::new(v, 0.0));
+            potential + hf_term
+        }
+        None => potential.clone(),
+    };
+
     let rhs = (1.0 / i)
         * (Complex::new(1.0, 0.0) - i * condensate.gamma)
-        * ((potential.clone() + interaction - condensate.chemical_potential) * phi + kinetic);
+        * ((effective_potential + interaction - condensate.chemical_potential) * phi + kinetic
+            - Complex::new(omega_rotation, 0.0) * lz_psi);
 
     if debug_io_enabled() {
         if let Err(e) = write_phi(&rhs, "./src/debug/rhs.txt") {
@@ -171,6 +318,9 @@ pub fn calculate_noise(
 }
 
 /// Performs a single Runge-Kutta step for the SGPE.
+///
+/// The angular momentum operator \(\hat{L}_z\) is evaluated at each substage
+/// using [`angular_momentum_lz`] and passed to [`sgpe`].
 pub fn runge_kutta_step_2d(
     y: &Array2<Complex<f64>>,
     h: &f64,
@@ -180,6 +330,12 @@ pub fn runge_kutta_step_2d(
     potential: &Array2<Complex<f64>>,
     condensate: &Condensate,
     k_sq: &Array2<f64>,
+    omega_rotation: f64,
+    kx: &Array1<f64>,
+    ky: &Array1<f64>,
+    x: &Array1<f64>,
+    y_coords: &Array1<f64>,
+    thermal_cloud_density: Option<&Array2<f64>>,
 ) -> Array2<Complex<f64>> {
     // Generate Wiener noise from a normal distribution
     let wiener_noise: Array2<f64> = generate_wiener_noise(gridpoints);
@@ -190,30 +346,58 @@ pub fn runge_kutta_step_2d(
     // Calculate the final noise array
     let noise: Array2<Complex<f64>> = calculate_noise(noise_magnitude, &wiener_noise, &phase_noise);
 
-    let k1 = sgpe(y, potential, interaction_strength, condensate, k_sq);
-    let k2 = sgpe(
-        &(y + Complex::new(h / 2.0, 0.0) * &k1),
+    let lz_k1 = angular_momentum_lz(y, x, y_coords, kx, ky);
+    let k1 = sgpe(
+        y,
         potential,
         interaction_strength,
         condensate,
         k_sq,
-    );
-    let k3 = sgpe(
-        &(y + Complex::new(h / 2.0, 0.0) * &k2),
-        potential,
-        interaction_strength,
-        condensate,
-        k_sq,
-    );
-    let k4 = sgpe(
-        &(y + Complex::new(h / 1.0, 0.0) * &k3),
-        potential,
-        interaction_strength,
-        condensate,
-        k_sq,
+        omega_rotation,
+        &lz_k1,
+        thermal_cloud_density,
     );
 
-    y + Complex::new(h / 6.0, 0.0) * (k1 + Complex::new(2.0, 0.0) * (k2 + k3) + k4) + noise
+    let y2 = y + Complex::new(*h / 2.0, 0.0) * &k1;
+    let lz_k2 = angular_momentum_lz(&y2, x, y_coords, kx, ky);
+    let k2 = sgpe(
+        &y2,
+        potential,
+        interaction_strength,
+        condensate,
+        k_sq,
+        omega_rotation,
+        &lz_k2,
+        thermal_cloud_density,
+    );
+
+    let y3 = y + Complex::new(*h / 2.0, 0.0) * &k2;
+    let lz_k3 = angular_momentum_lz(&y3, x, y_coords, kx, ky);
+    let k3 = sgpe(
+        &y3,
+        potential,
+        interaction_strength,
+        condensate,
+        k_sq,
+        omega_rotation,
+        &lz_k3,
+        thermal_cloud_density,
+    );
+
+    let y4 = y + Complex::new(*h / 1.0, 0.0) * &k3;
+    let lz_k4 = angular_momentum_lz(&y4, x, y_coords, kx, ky);
+    let k4 = sgpe(
+        &y4,
+        potential,
+        interaction_strength,
+        condensate,
+        k_sq,
+        omega_rotation,
+        &lz_k4,
+        thermal_cloud_density,
+    );
+
+    y + Complex::new(*h / 6.0, 0.0) * (k1 + Complex::new(2.0, 0.0) * (k2 + k3) + k4) + noise
 }
 
 /// Performs the full Runge-Kutta time evolution for the SGPE.
@@ -228,6 +412,10 @@ pub fn runge_kutta_2d(
     x_pos: &Array1<f64>,
     y_pos: &Array1<f64>,
     k_sq: &Array2<f64>,
+    omega_rotation: f64,
+    kx: &Array1<f64>,
+    ky: &Array1<f64>,
+    thermal_cloud_density: Option<&Array2<f64>>,
     save_full_trajectory: bool,
     dir: &Path,
 ) -> Array2<Complex<f64>> {
@@ -275,6 +463,12 @@ pub fn runge_kutta_2d(
             &potential,
             condensate,
             k_sq,
+            omega_rotation,
+            kx,
+            ky,
+            x_pos,
+            y_pos,
+            thermal_cloud_density,
         );
 
         t += simulation.timestep;
@@ -347,6 +541,7 @@ mod tests {
             frequency_x: 2.0 * PI * 25.0,
             frequency_y: 2.0 * PI * 25.0,
             frequency_z: 2.0 * PI * 100.0,
+            omega_rotation: 0.0,
             depth: None,
             ring_radius: None,
             trap_radius: None,
@@ -359,6 +554,43 @@ mod tests {
 
     fn test_y() -> Array1<f64> {
         Array1::linspace(-10.0, 10.0, 33)
+    }
+
+    /// Build k-space arrays for a uniform grid with spacing `dx`, `dy`.
+    fn make_k_space(
+        nx: usize,
+        ny: usize,
+        dx: f64,
+        dy: f64,
+    ) -> (Array1<f64>, Array1<f64>, Array2<f64>) {
+        let kx = Array1::from_shape_fn(nx, |i| {
+            let freq = i as f64 / (nx as f64 * dx);
+            if i > nx / 2 {
+                freq - 1.0 / dx
+            } else {
+                freq
+            }
+        }) * 2.0
+            * std::f64::consts::PI;
+
+        let ky = Array1::from_shape_fn(ny, |i| {
+            let freq = i as f64 / (ny as f64 * dy);
+            if i > ny / 2 {
+                freq - 1.0 / dy
+            } else {
+                freq
+            }
+        }) * 2.0
+            * std::f64::consts::PI;
+
+        let kx_sq = kx.mapv(|v| v.powi(2));
+        let ky_sq = ky.mapv(|v| v.powi(2));
+        let k_sq = kx_sq
+            .into_shape((nx, 1))
+            .expect("kx_sq shape conversion failed")
+            + ky_sq;
+
+        (kx, ky, k_sq)
     }
 
     #[test]
@@ -418,19 +650,340 @@ mod tests {
         };
         let kx = Array1::from_shape_fn(gp.0, |i| {
             let f = i as f64 / (gp.0 as f64);
-            if i > gp.0 / 2 { f - 1.0 } else { f }
+            if i > gp.0 / 2 {
+                f - 1.0
+            } else {
+                f
+            }
         } * 2.0 * PI);
         let ky = Array1::from_shape_fn(gp.1, |i| {
             let f = i as f64 / (gp.1 as f64);
-            if i > gp.1 / 2 { f - 1.0 } else { f }
+            if i > gp.1 / 2 {
+                f - 1.0
+            } else {
+                f
+            }
         } * 2.0 * PI);
         let kx_sq = kx.mapv(|v| v.powi(2));
         let ky_sq = ky.mapv(|v| v.powi(2));
         let k_sq = kx_sq.into_shape((gp.0, 1)).unwrap() + ky_sq;
 
-        let result =
-            runge_kutta_step_2d(&y, &0.001, &gp, 0.01, &1.0, &potential, &condensate, &k_sq);
+        let result = runge_kutta_step_2d(
+            &y,
+            &0.001,
+            &gp,
+            0.01,
+            &1.0,
+            &potential,
+            &condensate,
+            &k_sq,
+            0.0,
+            &kx,
+            &ky,
+            &x,
+            &y_coords,
+            None,
+        );
 
         assert_eq!(result.shape(), &[33, 33]);
+    }
+
+    // --- seed_initial_state tests ---
+
+    #[test]
+    fn seed_initial_state_shape() {
+        let gp = (64, 128);
+        let state = seed_initial_state(gp, 1.0);
+        assert_eq!(state.shape(), &[64, 128]);
+    }
+
+    #[test]
+    fn seed_initial_state_mean_zero() {
+        let gp = (128, 128);
+        let state = seed_initial_state(gp, 1.0);
+        let mean = state.iter().map(|c| c.re).sum::<f64>() / (128.0 * 128.0);
+        assert!(mean.abs() < 0.01, "real mean = {} should be ~0", mean);
+    }
+
+    #[test]
+    fn seed_initial_state_variance() {
+        let gp = (128, 128);
+        let amplitude = 1.0;
+        let state = seed_initial_state(gp, amplitude);
+        let n_elements = (gp.0 * gp.1) as f64;
+        let mean_sq = state.iter().map(|c| c.norm_sqr()).sum::<f64>() / n_elements;
+        let expected = amplitude * amplitude;
+        let rel_err = (mean_sq - expected).abs() / expected;
+        assert!(
+            rel_err < 0.1,
+            "⟨|ψ|²⟩ = {:.4e}, expected {:.4e} (rel_err = {:.2e})",
+            mean_sq,
+            expected,
+            rel_err
+        );
+    }
+
+    // --- angular_momentum_lz tests ---
+
+    #[test]
+    fn lz_shape() {
+        let nx = 32;
+        let ny = 32;
+        let dx = 10.0 / 31.0;
+        let dy = 10.0 / 31.0;
+        let x = Array1::linspace(-5.0, 5.0, nx);
+        let y = Array1::linspace(-5.0, 5.0, ny);
+        let (kx, ky, _) = make_k_space(nx, ny, dx, dy);
+
+        let psi = Array2::from_shape_fn((nx, ny), |(i, j)| {
+            Complex::new(f64::exp(-0.5 * (x[i] * x[i] + y[j] * y[j])), 0.0)
+        });
+
+        let lz = angular_momentum_lz(&psi, &x, &y, &kx, &ky);
+        assert_eq!(lz.shape(), &[nx, ny]);
+    }
+
+    #[test]
+    fn lz_gaussian() {
+        // A real Gaussian centred at the origin is an s-wave state with
+        // L_z eigenvalue 0. The numerical result should be near zero.
+        let nx = 32;
+        let ny = 32;
+        let dx = 10.0 / 31.0;
+        let dy = 10.0 / 31.0;
+        let x = Array1::linspace(-5.0, 5.0, nx);
+        let y = Array1::linspace(-5.0, 5.0, ny);
+        let (kx, ky, _) = make_k_space(nx, ny, dx, dy);
+
+        let psi = Array2::from_shape_fn((nx, ny), |(i, j)| {
+            Complex::new(f64::exp(-0.5 * (x[i] * x[i] + y[j] * y[j])), 0.0)
+        });
+
+        let lz = angular_momentum_lz(&psi, &x, &y, &kx, &ky);
+        let max_val = lz.iter().map(|c| c.norm()).fold(0.0_f64, f64::max);
+        // FFT gradients on a 32² grid have O(1e-5) discretisation error.
+        assert!(
+            max_val < 2e-5,
+            "L_z on real Gaussian should be near zero, max |Lz psi| = {:.2e}",
+            max_val
+        );
+    }
+
+    #[test]
+    fn lz_vortex() {
+        // (x + iy) * exp(-r²/2) is an L_z = 1 eigenstate.
+        // L_z psi / psi should be ≈ 1 everywhere psi is non-zero.
+        let nx = 32;
+        let ny = 32;
+        let dx = 10.0 / 31.0;
+        let dy = 10.0 / 31.0;
+        let x = Array1::linspace(-5.0, 5.0, nx);
+        let y = Array1::linspace(-5.0, 5.0, ny);
+        let (kx, ky, _) = make_k_space(nx, ny, dx, dy);
+
+        let psi = Array2::from_shape_fn((nx, ny), |(i, j)| {
+            let r2 = x[i] * x[i] + y[j] * y[j];
+            let vortex = Complex::new(x[i], y[j]);
+            vortex * Complex::new(f64::exp(-0.5 * r2), 0.0)
+        });
+
+        let lz = angular_momentum_lz(&psi, &x, &y, &kx, &ky);
+
+        // Check the eigenvalue at points where |psi| is large.
+        let mut max_ratio_err = 0.0_f64;
+        for i in 0..nx {
+            for j in 0..ny {
+                let p = psi[[i, j]];
+                let l = lz[[i, j]];
+                let norm_p = p.norm();
+                if norm_p > 0.1 {
+                    // L_z psi should equal psi for this eigenstate.
+                    let err = (l - p).norm() / norm_p;
+                    if err > max_ratio_err {
+                        max_ratio_err = err;
+                    }
+                }
+            }
+        }
+        // FFT gradients on a 32² grid have O(1e-5) discretisation error.
+        assert!(
+            max_ratio_err < 2e-5,
+            "L_z eigenvalue error = {:.2e}, expected < 2e-5",
+            max_ratio_err
+        );
+    }
+
+    // --- sgpe tests ---
+
+    #[test]
+    fn sgpe_with_rotation() {
+        // SGPE with omega_rotation != 0 should produce the correct shape.
+        let gp = (32, 32);
+        let nx = gp.0;
+        let ny = gp.1;
+        let dx = 10.0 / 31.0;
+        let dy = 10.0 / 31.0;
+        let x = Array1::linspace(-5.0, 5.0, nx);
+        let y = Array1::linspace(-5.0, 5.0, ny);
+        let (kx, ky, k_sq) = make_k_space(nx, ny, dx, dy);
+
+        let psi = Array2::from_shape_fn(gp, |(i, j)| {
+            Complex::new(f64::exp(-0.5 * (x[i] * x[i] + y[j] * y[j])), 0.0)
+        });
+
+        let trap = test_trap();
+        let potential = calculate_potential(&x, &y, &trap);
+        let condensate = Condensate {
+            temperature: 0.0,
+            gamma: 0.0,
+            scattering_length: 100.0 * BOHR_RADIUS,
+            chemical_potential: 0.0,
+        };
+
+        let lz_psi = angular_momentum_lz(&psi, &x, &y, &kx, &ky);
+        let result = sgpe(
+            &psi,
+            &potential,
+            &1.0,
+            &condensate,
+            &k_sq,
+            1.0,
+            &lz_psi,
+            None,
+        );
+
+        assert_eq!(result.shape(), &[nx, ny]);
+    }
+
+    #[test]
+    fn sgpe_thermal_cloud_gated() {
+        // Passing Some(n_tilde) should change the result relative to None.
+        let gp = (16, 16);
+        let nx = gp.0;
+        let ny = gp.1;
+        let dx = 10.0 / 15.0;
+        let dy = 10.0 / 15.0;
+        let x = Array1::linspace(-5.0, 5.0, nx);
+        let y = Array1::linspace(-5.0, 5.0, ny);
+        let (kx, ky, k_sq) = make_k_space(nx, ny, dx, dy);
+
+        let psi = Array2::from_shape_fn(gp, |(i, j)| {
+            Complex::new(f64::exp(-0.5 * (x[i] * x[i] + y[j] * y[j])), 0.0)
+        });
+
+        let trap = test_trap();
+        let potential = calculate_potential(&x, &y, &trap);
+        let condensate = Condensate {
+            temperature: 0.0,
+            gamma: 0.0,
+            scattering_length: 100.0 * BOHR_RADIUS,
+            chemical_potential: 0.0,
+        };
+
+        let lz_psi = angular_momentum_lz(&psi, &x, &y, &kx, &ky);
+        let n_tilde = Array2::from_elem(gp, 0.1);
+
+        let result_none = sgpe(
+            &psi,
+            &potential,
+            &1.0,
+            &condensate,
+            &k_sq,
+            0.0,
+            &lz_psi,
+            None,
+        );
+        let result_some = sgpe(
+            &psi,
+            &potential,
+            &1.0,
+            &condensate,
+            &k_sq,
+            0.0,
+            &lz_psi,
+            Some(&n_tilde),
+        );
+
+        assert_eq!(result_none.shape(), &[nx, ny]);
+        assert_eq!(result_some.shape(), &[nx, ny]);
+
+        // The two results should differ (thermal cloud adds an extra potential).
+        let max_diff = (&result_some - &result_none)
+            .iter()
+            .map(|c| c.norm())
+            .fold(0.0_f64, f64::max);
+        assert!(
+            max_diff > 0.0,
+            "sgpe with thermal cloud should differ from without"
+        );
+    }
+
+    #[test]
+    fn conservative_gpe_limit() {
+        // With gamma = 0, noise_magnitude = 0, omega_rotation = 0,
+        // and no thermal cloud, the SGPE reduces to the conservative GPE.
+        // Norm should be conserved to high precision over a single RK4 step.
+        let gp = (32, 32);
+        let nx = gp.0;
+        let ny = gp.1;
+        let x = Array1::linspace(-5.0, 5.0, nx);
+        let y_coords = Array1::linspace(-5.0, 5.0, ny);
+        let dx = 10.0 / 31.0;
+        let dy = 10.0 / 31.0;
+        let (kx, ky, k_sq) = make_k_space(nx, ny, dx, dy);
+
+        let trap = Trap {
+            trap_type: TrapType::Harmonic,
+            frequency_x: 2.0 * PI * 25.0,
+            frequency_y: 2.0 * PI * 25.0,
+            frequency_z: 2.0 * PI * 100.0,
+            omega_rotation: 0.0,
+            depth: None,
+            ring_radius: None,
+            trap_radius: None,
+        };
+        let potential = calculate_potential(&x, &y_coords, &trap);
+        let condensate = Condensate {
+            temperature: 0.0,
+            gamma: 0.0,
+            scattering_length: 100.0 * BOHR_RADIUS,
+            chemical_potential: 0.0,
+        };
+
+        // Initial Gaussian state.
+        let y_init = Array2::from_shape_fn(gp, |(i, j)| {
+            Complex::new(
+                f64::exp(-0.5 * (x[i] * x[i] + y_coords[j] * y_coords[j])),
+                0.0,
+            )
+        });
+
+        let step_area = dx * dy;
+        let initial_norm = y_init.iter().map(|&c| c.norm_sqr()).sum::<f64>() * step_area;
+
+        let result = runge_kutta_step_2d(
+            &y_init,
+            &1e-3,
+            &gp,
+            0.0,
+            &1.0,
+            &potential,
+            &condensate,
+            &k_sq,
+            0.0,
+            &kx,
+            &ky,
+            &x,
+            &y_coords,
+            None,
+        );
+
+        let final_norm = result.iter().map(|&c| c.norm_sqr()).sum::<f64>() * step_area;
+        let norm_change = (final_norm - initial_norm).abs();
+        assert!(
+            norm_change < 1e-12,
+            "norm change = {:.2e}, expected < 1e-12",
+            norm_change
+        );
     }
 }

@@ -11,9 +11,7 @@
 //! \(V(\mathbf{r})\) is the trapping potential, \(g\) is the interaction strength,
 //! \(\mu\) is the chemical potential, and \(\eta(\mathbf{r},t)\) is a complex Gaussian noise term.
 
-use ndarray::{Array1, Array2};
-use num::complex::Complex;
-use rand_distr::{Distribution, StandardNormal};
+use ndarray::Array1;
 use rayon::prelude::*;
 use std::env;
 use std::path::Path;
@@ -23,19 +21,6 @@ use aquid::k_space::*;
 use aquid::rk4;
 use aquid::types::*;
 use aquid::utils::*;
-
-/// Generates an initial state with low-amplitude complex noise to represent a thermal field.
-fn generate_initial_state(gridpoints: (usize, usize)) -> Array2<Complex<f64>> {
-    let mut rng = rand::thread_rng();
-    let dist = StandardNormal;
-    // The initial amplitude should be small, representing quantum fluctuations.
-    let initial_amplitude = 1e-5;
-    Array2::from_shape_fn(gridpoints, |_| {
-        let re = <StandardNormal as Distribution<f64>>::sample(&dist, &mut rng) * initial_amplitude;
-        let im = <StandardNormal as Distribution<f64>>::sample(&dist, &mut rng) * initial_amplitude;
-        Complex::new(re, im)
-    })
-}
 
 // Main function for the SGPE simulation
 //
@@ -113,6 +98,7 @@ fn main() {
         depth: None,                   //Some(1.0),
         ring_radius: None,             //Some(1.0),
         trap_radius: None,             //Some(1.0),
+        omega_rotation: 0.0,
     };
 
     // Calculate scaling factors from harmonic oscillator units
@@ -159,9 +145,12 @@ fn main() {
 
     // Check CFL (Courant-Friedrichs-Lewy) condition
     // This condition ensures numerical stability of the simulation
+    let min_step = f64::min(simulation.step_size.0, simulation.step_size.1);
     assert!(
-        simulation.timestep < 0.5 * simulation.step_size.0,
-        "CFL condition violated: timestep must be less than 0.5 * step_size."
+        simulation.timestep < 0.5 * min_step,
+        "CFL condition violated: timestep ({}) must be less than 0.5 * min(dx, dy) = ({})",
+        simulation.timestep,
+        0.5 * min_step,
     );
 
     // Initialize simulation grid
@@ -176,7 +165,7 @@ fn main() {
         simulation.gridpoints.1,
     );
 
-    let (_kx, _ky, k_sq) = generate_k_space(&simulation);
+    let (kx, ky, k_sq) = generate_k_space(&simulation);
 
     // Calculate noise magnitude
     // The noise magnitude is related to the temperature and damping of the system
@@ -243,8 +232,9 @@ fn main() {
 
             let k_sq_clone = k_sq.clone();
 
-            // Write simulation parameters to file
-            let initial_phi = generate_initial_state(simulation.gridpoints);
+            // Seed initial state from thermal noise (FDT amplitude = noise_magnitude).
+            let initial_amplitude = noise_magnitude;
+            let initial_phi = rk4::seed_initial_state(simulation.gridpoints, initial_amplitude);
 
             // Run the SGPE simulation using the Runge-Kutta method
             let _phi = rk4::runge_kutta_2d(
@@ -258,6 +248,10 @@ fn main() {
                 &x,
                 &y,
                 &k_sq_clone,
+                trap.omega_rotation / trap.frequency_x, // dimensionless Ω̃ = Ω/ω_x
+                &kx,
+                &ky,
+                None, // thermal_cloud_density (gated off)
                 save_full_trajectory,
                 &run_dir,
             );
