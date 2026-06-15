@@ -3,69 +3,13 @@
 use super::constants::*;
 use super::types::*;
 use super::utils::*;
+use crate::potential::calculate_potential;
 use ndarray::{Array1, Array2};
 use num_complex::Complex;
 use rand_distr::{Distribution, StandardNormal};
 use rustfft::FftPlanner;
 use std::path::Path;
 use std::sync::OnceLock;
-
-/// Calculates the harmonic potential in dimensionless units.
-///
-/// The coordinates \(x, y\) are scaled by \(\ell_x = \sqrt{\hbar/(m\omega_x)}\), so the
-/// dimensionless harmonic potential is
-/// \[
-/// \tilde{V}(\tilde x,\tilde y) = \frac{1}{2}\tilde x^2 + \frac{1}{2}\left(\frac{\omega_y}{\omega_x}\right)^2 \tilde y^2 .
-/// \]
-/// Energy is in units of \(\hbar\omega_x\).
-pub fn harmonic_potential(x: &Array1<f64>, y: &Array1<f64>, trap: &Trap) -> Array2<Complex<f64>> {
-    let aspect_ratio_y = trap.frequency_y / trap.frequency_x;
-
-    let potential_x = 0.5 * x.mapv(|x| x.powi(2)).into_shape((x.len(), 1)).unwrap();
-    let potential_y =
-        0.5 * aspect_ratio_y.powi(2) * y.mapv(|y| y.powi(2)).into_shape((1, y.len())).unwrap();
-
-    let potential = potential_x + potential_y;
-    potential.mapv(|val| Complex::new(val, 0.0))
-}
-
-/// Calculates the toroidal potential.
-///
-/// [V(r) = V_0(1 - e^{-\frac{(r-R)^2}{2\sigma^2}})]
-pub fn toroidal_potential(x: &Array1<f64>, y: &Array1<f64>, trap: &Trap) -> Array2<Complex<f64>> {
-    // Unwrap the toroidal trap parameters
-    let depth = trap.depth.expect("Depth is required for a toroidal trap");
-    let ring_radius = trap
-        .ring_radius
-        .expect("Ring radius is required for a toroidal trap");
-    let trap_radius = trap
-        .trap_radius
-        .expect("Trap radius is required for a toroidal trap");
-
-    // Create a grid of x and y values
-    let x_grid = x.broadcast((y.len(), x.len())).unwrap();
-    let y_grid = y.broadcast((x.len(), y.len())).unwrap().reversed_axes();
-
-    // Compute rho for each pair in the grid
-    let rho = (&x_grid * &x_grid + &y_grid * &y_grid).mapv(f64::sqrt);
-
-    // Compute the potential using the given equation
-    let potential = depth
-        * (1.0
-            - (-1.0 / trap_radius.powi(2) * (&rho - ring_radius).mapv(|rho_r| rho_r.powi(2)))
-                .mapv(f64::exp));
-
-    // Convert the potential to Complex<f64>
-    potential.mapv(|val| Complex::new(val, 0.0))
-}
-
-/// Selects and calculates the appropriate potential based on trap type.
-pub fn calculate_potential(x: &Array1<f64>, y: &Array1<f64>, trap: &Trap) -> Array2<Complex<f64>> {
-    match trap.trap_type {
-        TrapType::Harmonic | TrapType::Cigar => harmonic_potential(x, y, trap),
-        TrapType::Toroidal => toroidal_potential(x, y, trap),
-    }
-}
 
 fn debug_io_enabled() -> bool {
     static FLAG: OnceLock<bool> = OnceLock::new();
@@ -395,6 +339,7 @@ pub fn runge_kutta_2d(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::potential::harmonic_potential;
     use ndarray::Array1;
 
     fn test_trap() -> Trap {
