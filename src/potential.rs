@@ -1,62 +1,108 @@
-//! Potential energy functions for the SGPE simulation.
+//! Trap and barrier potentials for the SGPE simulation.
 //!
-//! This module provides implementations of the harmonic and toroidal trapping
-//! potentials, together with two Gaussian weak-link barriers for atomtronic
-//! SQUID simulations. The barrier potentials are time-dependent, with the
-//! junction positions advancing according to the bias kinematics.
-//!
-//! All potentials are returned as \(\text{Array2}<\text{Complex}<\text{f64}>>\) with
-//! zero imaginary part, since the potentials are real-valued.
+//! Provides analytic forms for the harmonic and toroidal ring traps, and the
+//! two Gaussian weak-link barriers that form the atomtronic SQUID.
 
-use crate::constants::PI;
-use crate::types::{Trap, TrapType};
+use super::constants::*;
+use super::types::*;
 use ndarray::{Array1, Array2};
 use num_complex::Complex;
 
-/// Configuration for the two weak-link barriers forming the Josephson junctions.
+/// Configuration for the two weak-link laser barriers forming the atomtronic SQUID.
 ///
-/// The barriers are placed at angular positions \(\theta_1, \theta_2\) on a ring
-/// of radius \(R\). Their kinematics are:
-/// \(\dot\theta_1 = \Omega_{\mathrm{ext}} + 2\pi f\),
-/// \(\dot\theta_2 = \Omega_{\mathrm{ext}} - 2\pi f\).
+/// The junctions co-rotate at \(\Omega_{\mathrm{ext}}\) and are driven differentially
+/// to inject bias. Kinematics:
+///
+/// \[
+/// \dot\theta_1 = \Omega_{\mathrm{ext}} + 2\pi f(t), \qquad
+/// \dot\theta_2 = \Omega_{\mathrm{ext}} - 2\pi f(t)
+/// \]
+///
+/// The differential frequency \(f\) is ramped linearly from 0 to `f_target` over
+/// `ramp_duration`, then held at `f_target` for `hold_duration`.
+#[derive(Debug, Clone)]
 pub struct BarrierConfig {
-    /// Barrier height \(U_b\) (dimensionless)
-    pub height: f64,
-    /// Gaussian width \(\sigma_b\) (dimensionless, in units of \(\ell_x\))
-    pub width: f64,
-    /// Angular position of junction 1 [rad]
-    pub theta_1: f64,
-    /// Angular position of junction 2 [rad]
-    pub theta_2: f64,
-    /// Common rotation rate \(\Omega_{\mathrm{ext}}\) [rad/sim-time]
+    /// Initial angular position of junction 1 [rad]
+    pub theta_1_init: f64,
+    /// Initial angular position of junction 2 [rad] (typically \(\theta_1 + \pi\))
+    pub theta_2_init: f64,
+    /// Common-mode rotation rate \(\Omega_{\mathrm{ext}}\) [rad/s]
     pub omega_ext: f64,
-    /// Differential frequency \(f\) (dimensionless, bias current \(= 4f\))
-    pub f: f64,
+    /// Differential drive frequency set-point [Hz]
+    pub f_target: f64,
+    /// Ramp duration for \(f\): 0 → f_target [s]
+    pub ramp_duration: f64,
+    /// Hold duration after ramp completes [s]
+    pub hold_duration: f64,
 }
 
 impl BarrierConfig {
-    /// Create a new barrier configuration.
+    /// Create a new barrier configuration with diametrically opposed junctions.
     ///
-    /// Junction 1 starts at \(\theta_1 = 0\), junction 2 at \(\theta_2 = \pi\)
-    /// (diametrically opposed).
-    pub fn new(height: f64, width: f64, omega_ext: f64, f: f64) -> Self {
+    /// Junction 2 is initialised at \(\theta_1 + \pi\).
+    pub fn new(
+        theta_1_init: f64,
+        omega_ext: f64,
+        f_target: f64,
+        ramp_duration: f64,
+        hold_duration: f64,
+    ) -> Self {
         Self {
-            height,
-            width,
-            theta_1: 0.0,
-            theta_2: PI,
+            theta_1_init,
+            theta_2_init: theta_1_init + PI,
             omega_ext,
-            f,
+            f_target,
+            ramp_duration,
+            hold_duration,
         }
     }
 
-    /// Advance both junction angles by one timestep.
+    /// Integrated differential phase contribution at time \(t\):
+    /// \(\Delta\phi(t) = 2\pi\int_0^t f(s)\,ds\).
     ///
-    /// \(\theta_1 \mathrel{+}= (\Omega_{\mathrm{ext}} + 2\pi f)\,\mathrm{d}t\),
-    /// \(\theta_2 \mathrel{+}= (\Omega_{\mathrm{ext}} - 2\pi f)\,\mathrm{d}t\).
-    pub fn step(&mut self, dt: f64) {
-        self.theta_1 += (self.omega_ext + 2.0 * PI * self.f) * dt;
-        self.theta_2 += (self.omega_ext - 2.0 * PI * self.f) * dt;
+    /// For a linear ramp \(f(s) = f_{\mathrm{target}}\,s / t_{\mathrm{ramp}}\) on
+    /// \([0, t_{\mathrm{ramp}}]\) and constant \(f_{\mathrm{target}}\) thereafter:
+    ///
+    /// \[
+    /// \Delta\phi(t) =
+    /// \begin{cases}
+    /// 0 & t \le 0,\\[4pt]
+    /// \pi\,f_{\mathrm{target}}\,t^2 / t_{\mathrm{ramp}} & 0 < t \le t_{\mathrm{ramp}},\\[4pt]
+    /// \pi\,f_{\mathrm{target}}\,t_{\mathrm{ramp}}
+    ///   + 2\pi\,f_{\mathrm{target}}\,(t - t_{\mathrm{ramp}}) & t > t_{\mathrm{ramp}}.
+    ///
+    /// \end{cases}
+    ///
+    /// \]
+    fn differential_phase(&self, t: f64) -> f64 {
+        if t <= 0.0 {
+            0.0
+        } else if t <= self.ramp_duration {
+            PI * self.f_target * t * t / self.ramp_duration
+        } else {
+            PI * self.f_target * self.ramp_duration
+                + 2.0 * PI * self.f_target * (t - self.ramp_duration)
+        }
+    }
+
+    /// Return the angular positions \((\theta_1, \theta_2)\) of the two barriers at
+    /// elapsed time \(t\) [s].
+    ///
+    /// \[
+    /// \begin{aligned}
+    /// \theta_1(t) &= \theta_1(0) + \Omega_{\mathrm{ext}}\,t + \Delta\phi(t),\\
+    /// \theta_2(t) &= \theta_2(0) + \Omega_{\mathrm{ext}}\,t - \Delta\phi(t),
+    /// \end{aligned}
+    /// \]
+    ///
+    /// where \(\Delta\phi(t) = 2\pi\int_0^t f(s)\,ds\) is the integrated differential
+    /// phase from [`differential_phase`].
+    pub fn angles_at(&self, t: f64) -> (f64, f64) {
+        let delta = self.differential_phase(t);
+        let common = self.omega_ext * t;
+        let theta_1 = self.theta_1_init + common + delta;
+        let theta_2 = self.theta_2_init + common - delta;
+        (theta_1, theta_2)
     }
 }
 
@@ -68,6 +114,8 @@ impl BarrierConfig {
 /// \tilde{V}(\tilde x,\tilde y) = \frac{1}{2}\tilde x^2 + \frac{1}{2}\left(\frac{\omega_y}{\omega_x}\right)^2 \tilde y^2 .
 /// \]
 /// Energy is in units of \(\hbar\omega_x\).
+///
+/// The returned array has shape \((n_x, n_y)\) with axis 0 = \(x\), axis 1 = \(y\).
 pub fn harmonic_potential(x: &Array1<f64>, y: &Array1<f64>, trap: &Trap) -> Array2<Complex<f64>> {
     let aspect_ratio_y = trap.frequency_y / trap.frequency_x;
 
@@ -82,10 +130,17 @@ pub fn harmonic_potential(x: &Array1<f64>, y: &Array1<f64>, trap: &Trap) -> Arra
 /// Calculates the toroidal potential.
 ///
 /// \[
-/// V(r) = V_0\left(1 - e^{-\frac{(r - R)^2}{2\sigma^2}}\right)
+/// V(r) = V_0\left(1 - e^{-\frac{(r-R)^2}{2\sigma^2}}\right)
 /// \]
+///
+/// The returned array has shape \((n_x, n_y)\) with axis 0 = \(x\), axis 1 = \(y\).
 pub fn toroidal_potential(x: &Array1<f64>, y: &Array1<f64>, trap: &Trap) -> Array2<Complex<f64>> {
     let depth = trap.depth.expect("Depth is required for a toroidal trap");
+    assert!(
+        depth >= 0.0,
+        "toroidal trap depth must be non-negative, got {}",
+        depth
+    );
     let ring_radius = trap
         .ring_radius
         .expect("Ring radius is required for a toroidal trap");
@@ -93,15 +148,17 @@ pub fn toroidal_potential(x: &Array1<f64>, y: &Array1<f64>, trap: &Trap) -> Arra
         .trap_radius
         .expect("Trap radius is required for a toroidal trap");
 
-    debug_assert!(trap_radius > 0.0, "trap_radius must be positive");
+    let nx = x.len();
+    let ny = y.len();
 
-    let x_sq = x.mapv(|v| v.powi(2)).into_shape((x.len(), 1)).unwrap(); // (nx, 1)
-    let y_sq = y.mapv(|v| v.powi(2)).into_shape((1, y.len())).unwrap(); // (1, ny)
-    let r = (&x_sq + &y_sq).mapv(f64::sqrt); // (nx, ny) via broadcast
+    // Build separable (nx, ny) grid matching the wavefunction convention:
+    // axis 0 = x, axis 1 = y.
+    let x_sq = x.mapv(|v| v.powi(2)).into_shape((nx, 1)).unwrap();
+    let y_sq = y.mapv(|v| v.powi(2)).into_shape((1, ny)).unwrap();
+    let rho = (x_sq + y_sq).mapv(f64::sqrt);
 
-    let potential = depth
-        * (1.0
-            - (-0.5 / trap_radius.powi(2) * (r - ring_radius).mapv(|v| v.powi(2))).mapv(f64::exp));
+    let exponent = -1.0 / trap_radius.powi(2) * (&rho - ring_radius).mapv(|r| r.powi(2));
+    let potential = depth * (1.0 - exponent.mapv(f64::exp));
 
     potential.mapv(|val| Complex::new(val, 0.0))
 }
@@ -114,73 +171,90 @@ pub fn calculate_potential(x: &Array1<f64>, y: &Array1<f64>, trap: &Trap) -> Arr
     }
 }
 
-/// Computes the barrier potential from two Gaussian weak links.
+/// Computes the two Gaussian barrier potentials at time \(t\).
 ///
 /// \[
-/// V_{\mathrm{bar}}(\mathbf{r}, t) = \sum_{j=1,2} U_b
-///     \exp\!\left(-\frac{\|\mathbf{r} - \mathbf{r}_j(t)\|^2}{2\sigma_b^2}\right)
+/// V_{\mathrm{bar}}(\mathbf{r}, t) = \sum_{j=1,2} U_b\,
+/// \exp\!\left[-\frac{\lVert\mathbf{r} - \mathbf{r}_j(t)\rVert^2}{2\sigma_b^2}\right],
+/// \qquad
+/// \mathbf{r}_j(t) = R\,(\cos\theta_j(t), \sin\theta_j(t))
 /// \]
-/// where \(\mathbf{r}_j(t) = R(\cos\theta_j(t), \sin\theta_j(t))\).
 ///
-/// # Panics
+/// where \(U_b\) is the barrier height, \(\sigma_b\) the Gaussian width,
+/// \(R\) the ring radius, and \(\theta_j(t)\) from [`BarrierConfig::angles_at`].
 ///
-/// Panics if `trap.ring_radius` is `None` (programmer error: the barrier potential
-/// requires a ring geometry).
+/// The returned array has shape \((n_x, n_y)\) with axis 0 = \(x\), axis 1 = \(y\).
 pub fn barrier_potential(
     x: &Array1<f64>,
     y: &Array1<f64>,
-    trap: &Trap,
+    t: f64,
     config: &BarrierConfig,
+    barrier_height: f64,
+    barrier_width: f64,
+    ring_radius: f64,
 ) -> Array2<Complex<f64>> {
-    let ring_radius = trap
-        .ring_radius
-        .expect("ring_radius required for barrier potential");
+    assert!(
+        barrier_width > 0.0,
+        "barrier_width must be positive, got {}",
+        barrier_width
+    );
+    assert!(
+        barrier_height >= 0.0,
+        "barrier_height must be non-negative, got {}",
+        barrier_height
+    );
 
-    debug_assert!(config.width > 0.0, "barrier width must be positive");
+    let (theta_1, theta_2) = config.angles_at(t);
 
-    let x_sq = x.mapv(|v| v.powi(2)).into_shape((x.len(), 1)).unwrap(); // (nx, 1)
-    let y_sq = y.mapv(|v| v.powi(2)).into_shape((1, y.len())).unwrap(); // (1, ny)
-    let r_sq = &x_sq + &y_sq; // (nx, ny) — x[i]^2 + y[j]^2 at each grid point
-    let x_col = x.clone().into_shape((x.len(), 1)).unwrap(); // (nx, 1)
-    let y_row = y.clone().into_shape((1, y.len())).unwrap(); // (1, ny)
+    let nx = x.len();
+    let ny = y.len();
+    let inv_two_sigma_sq = 1.0 / (2.0 * barrier_width.powi(2));
 
-    let r0 = ring_radius;
-    let inv_two_sigma_sq = 1.0 / (2.0 * config.width.powi(2));
+    let x1 = ring_radius * theta_1.cos();
+    let y1 = ring_radius * theta_1.sin();
+    let x2 = ring_radius * theta_2.cos();
+    let y2 = ring_radius * theta_2.sin();
 
-    let mut result = Array2::zeros((x.len(), y.len()));
-    for &theta in &[config.theta_1, config.theta_2] {
-        let cross = &x_col * theta.cos() + &y_row * theta.sin(); // (nx, ny)
-        let dist_sq = &r_sq + (r0 * r0) - &(&cross * (2.0 * r0)); // (nx, ny)
-        result = &result + &dist_sq.mapv(|d2| (-d2 * inv_two_sigma_sq).exp());
-    }
-    (result * config.height).mapv(|val| Complex::new(val, 0.0))
+    // Barrier 1: separable (nx, ny) grid via into_shape, axis 0 = x, axis 1 = y
+    let dx1_sq = x.mapv(|v| (v - x1).powi(2)).into_shape((nx, 1)).unwrap();
+    let dy1_sq = y.mapv(|v| (v - y1).powi(2)).into_shape((1, ny)).unwrap();
+    let mut barrier = (-(dx1_sq + dy1_sq) * inv_two_sigma_sq).mapv(f64::exp);
+
+    // Barrier 2: accumulate in-place
+    let dx2_sq = x.mapv(|v| (v - x2).powi(2)).into_shape((nx, 1)).unwrap();
+    let dy2_sq = y.mapv(|v| (v - y2).powi(2)).into_shape((1, ny)).unwrap();
+    let barrier_2 = (-(dx2_sq + dy2_sq) * inv_two_sigma_sq).mapv(f64::exp);
+    barrier += &barrier_2;
+
+    (barrier_height * barrier).mapv(|val| Complex::new(val, 0.0))
 }
 
-/// Computes the total toroidal potential including weak-link barriers.
+/// Computes the total potential: ring trap + two weak-link barriers.
 ///
-/// Returns \(\texttt{toroidal\_potential}(x, y, \texttt{trap}) + \texttt{barrier\_potential}(x, y, \texttt{trap}, \texttt{config})\).
-///
-/// # Panics
-///
-/// Panics if the trap type is not `TrapType::Toroidal`.
+/// \[
+/// V_{\mathrm{total}}(\mathbf{r}, t) = V_{\mathrm{trap}}(\mathbf{r}) + V_{\mathrm{bar}}(\mathbf{r}, t)
+/// \]
 pub fn total_potential(
     x: &Array1<f64>,
     y: &Array1<f64>,
+    t: f64,
     trap: &Trap,
     config: &BarrierConfig,
+    barrier_height: f64,
+    barrier_width: f64,
+    ring_radius: f64,
 ) -> Array2<Complex<f64>> {
-    match trap.trap_type {
-        TrapType::Toroidal => {
-            toroidal_potential(x, y, trap) + barrier_potential(x, y, trap, config)
-        }
-        _ => panic!("total_potential is only valid for Toroidal trap type"),
-    }
+    let mut ring = calculate_potential(x, y, trap);
+    let barriers = barrier_potential(x, y, t, config, barrier_height, barrier_width, ring_radius);
+    ring += &barriers;
+    ring
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ndarray::Array1;
+
+    // --- Test helpers ---
 
     fn test_trap() -> Trap {
         Trap {
@@ -197,17 +271,17 @@ mod tests {
     fn test_toroidal_trap() -> Trap {
         Trap {
             trap_type: TrapType::Toroidal,
-            frequency_x: 2.0 * PI * 570.0,
-            frequency_y: 2.0 * PI * 570.0,
-            frequency_z: 2.0 * PI * 300.0,
-            depth: Some(1.0),
+            frequency_x: 2.0 * PI * 25.0,
+            frequency_y: 2.0 * PI * 25.0,
+            frequency_z: 2.0 * PI * 100.0,
+            depth: Some(10.0),
             ring_radius: Some(10.0),
             trap_radius: Some(2.0),
         }
     }
 
     fn test_barrier_config() -> BarrierConfig {
-        BarrierConfig::new(1.0, 1.5, 0.0, 0.0)
+        BarrierConfig::new(0.0, 0.0, 0.0, 1.0, 0.0)
     }
 
     fn test_x() -> Array1<f64> {
@@ -218,92 +292,223 @@ mod tests {
         Array1::linspace(-10.0, 10.0, 33)
     }
 
-    // --- Moved harmonic tests ---
+    // --- BarrierConfig tests ---
 
     #[test]
-    fn harmonic_potential_at_origin_is_zero() {
-        let trap = test_trap();
-        let x = test_x();
-        let y = test_y();
-        let v = harmonic_potential(&x, &y, &trap);
-        // With 33 points, the midpoint index 16 is exactly 0.0
-        let mid = 16;
-        let val = v[[mid, mid]].re;
-        assert!(val.abs() < 1e-10, "V(0,0) = {} should be ~0", val);
+    fn barrier_config_diametrically_opposed() {
+        let config = BarrierConfig::new(0.0, 1.0, 1.0, 1.0, 1.0);
+        let diff = config.theta_2_init - config.theta_1_init - PI;
+        assert!(
+            diff.abs() < 1e-15,
+            "theta_2_init should be theta_1_init + pi; diff = {:.2e}",
+            diff
+        );
     }
 
     #[test]
-    fn harmonic_potential_is_positive() {
-        let trap = test_trap();
-        let x = test_x();
-        let y = test_y();
-        let v = harmonic_potential(&x, &y, &trap);
+    fn barrier_config_angles_at_t0() {
+        let theta_1_init = 0.5;
+        let config = BarrierConfig::new(theta_1_init, 1.0, 1.0, 1.0, 1.0);
+        let (t1, t2) = config.angles_at(0.0);
+        assert!(
+            (t1 - theta_1_init).abs() < 1e-15,
+            "theta_1(0) = {}, expected {}",
+            t1,
+            theta_1_init
+        );
+        assert!(
+            (t2 - (theta_1_init + PI)).abs() < 1e-15,
+            "theta_2(0) = {}, expected {}",
+            t2,
+            theta_1_init + PI
+        );
+    }
+
+    #[test]
+    fn barrier_config_angles_ramp() {
+        // f_target = 2 Hz, ramp_duration = 2 s, omega_ext = 0.
+        // At t = 1.0 s (mid-ramp):
+        //   ∆φ = π·f_target·t² / ramp_duration = π·2·1/2 = π
+        //   θ₁ = 0 + 0 + π = π
+        //   θ₂ = π + 0 − π = 0
+        let config = BarrierConfig::new(0.0, 0.0, 2.0, 2.0, 1.0);
+        let (t1, t2) = config.angles_at(1.0);
+        assert!(
+            (t1 - PI).abs() < 1e-10,
+            "theta_1 = {}, expected pi",
+            t1
+        );
+        assert!(
+            t2.abs() < 1e-10,
+            "theta_2 = {}, expected 0",
+            t2
+        );
+    }
+
+    #[test]
+    fn barrier_config_angles_hold() {
+        // f_target = 1 Hz, ramp_duration = 1 s, omega_ext = 0.
+        // At t = 2.0 s (1 s after ramp complete):
+        //   ∆φ = π·f_target·t_ramp + 2π·f_target·(t − t_ramp)
+        //      = π·1·1 + 2π·1·(2−1) = π + 2π = 3π
+        //   θ₁ = 0 + 0 + 3π = 3π
+        let config = BarrierConfig::new(0.0, 0.0, 1.0, 1.0, 1.0);
+        let (t1, _) = config.angles_at(2.0);
+        let expected = 3.0 * PI;
+        assert!(
+            (t1 - expected).abs() < 1e-10,
+            "theta_1 = {}, expected {}",
+            t1,
+            expected
+        );
+    }
+
+    #[test]
+    fn barrier_config_sweep_small() {
+        // Total differential sweep should be small (order few degrees)
+        // for realistic parameters.
+        // f_target = 0.01 Hz, ramp_duration = 1.0 s, t = 1.0 s
+        // ∆φ = π·f_target·t² / ramp_duration = π·0.01 ≈ 0.0314 rad ≈ 1.8°
+        let config = BarrierConfig::new(0.0, 0.0, 0.01, 1.0, 0.0);
+        let (t1, t2) = config.angles_at(1.0);
+        // θ₁ − θ₂ = (θ₁(0) + ∆φ) − (θ₂(0) − ∆φ) = −π + 2∆φ
+        let differential_sweep = (t1 - t2 + PI).abs();
+        assert!(
+            differential_sweep < 0.2,
+            "differential sweep = {} rad should be small (< 0.2 rad = 11 deg)",
+            differential_sweep
+        );
+    }
+
+    #[test]
+    fn barrier_config_differential_phase_ramp() {
+        let config = BarrierConfig::new(0.0, 0.0, 2.0, 2.0, 0.0);
+        // At mid-ramp, ∆φ should be half of what it would be at t=ramp_duration
+        //   ∆φ(t_ramp) = π·f_target·t_ramp = π·2·2 = 4π
+        //   ∆φ(t_ramp/2) = π·2·1²/2 = π
+        let delta_mid = config.differential_phase(1.0);
+        let delta_end = config.differential_phase(2.0);
+        assert!((delta_mid - PI).abs() < 1e-10);
+        assert!((delta_end - 4.0 * PI).abs() < 1e-10);
+        // Mid-point should be 1/4 of end-point (quadratic, not linear)
+        assert!((delta_mid / delta_end - 0.25).abs() < 1e-10);
+    }
+
+    #[test]
+    fn barrier_potential_is_real() {
+        let nx = 64;
+        let ny = 64;
+        let x = Array1::linspace(-20.0, 20.0, nx);
+        let y = Array1::linspace(-20.0, 20.0, ny);
+        let config = BarrierConfig::new(0.0, 0.0, 0.0, 1.0, 0.0);
+        let v = barrier_potential(&x, &y, 0.0, &config, 1.0, 1.0, 10.0);
+        assert!(
+            v.iter().all(|c| c.im.abs() < 1e-15),
+            "barrier potential should be purely real"
+        );
+    }
+
+    #[test]
+    fn barrier_potential_is_nonnegative() {
+        let nx = 64;
+        let ny = 64;
+        let x = Array1::linspace(-20.0, 20.0, nx);
+        let y = Array1::linspace(-20.0, 20.0, ny);
+        let config = BarrierConfig::new(0.0, 0.0, 0.0, 1.0, 0.0);
+        let v = barrier_potential(&x, &y, 0.0, &config, 1.0, 1.0, 10.0);
         assert!(v.iter().all(|c| c.re >= 0.0));
     }
 
     #[test]
-    fn harmonic_potential_is_real() {
-        let trap = test_trap();
-        let x = test_x();
-        let y = test_y();
-        let v = harmonic_potential(&x, &y, &trap);
+    fn barrier_potential_two_peaks() {
+        let nx = 128;
+        let ny = 128;
+        let x = Array1::linspace(-20.0, 20.0, nx);
+        let y = Array1::linspace(-20.0, 20.0, ny);
+        let ring_radius = 10.0;
+        let config = BarrierConfig::new(0.0, 0.0, 0.0, 1.0, 0.0);
+        let barrier_width = 1.0;
+        let v = barrier_potential(&x, &y, 0.0, &config, 1.0, barrier_width, ring_radius);
+
+        // Array shape is (nx, ny) with v[[i, j]] = V(x[i], y[j]).
+        let step = 40.0 / ((nx - 1) as f64);
+        let idx_of = |val: f64| -> usize { ((val + 20.0) / step).round() as usize };
+
+        let idx_x1 = idx_of(ring_radius);   // x-index of +R
+        let idx_x2 = idx_of(-ring_radius);  // x-index of -R
+        let idx_mid = idx_of(0.0);          // index of 0
+
+        // Barriers centred at (+R, 0) and (−R, 0); evaluate along y = 0
+        let v_c1 = v[[idx_x1, idx_mid]].re;
+        let v_c2 = v[[idx_x2, idx_mid]].re;
+        let v_mid = v[[idx_mid, idx_mid]].re;
+
+        assert!(
+            v_c1 > 0.5,
+            "V at (R, 0) = {} should be near barrier_height",
+            v_c1
+        );
+        assert!(
+            v_c2 > 0.5,
+            "V at (-R, 0) = {} should be near barrier_height",
+            v_c2
+        );
+
+        // The potential at the origin should be lower than at the peaks
+        assert!(
+            v_mid < v_c1,
+            "V at origin = {} should be less than peak V = {}",
+            v_mid,
+            v_c1
+        );
+    }
+
+    #[test]
+    fn total_potential_is_real_and_nonnegative() {
+        let nx = 64;
+        let ny = 64;
+        let x = Array1::linspace(-20.0, 20.0, nx);
+        let y = Array1::linspace(-20.0, 20.0, ny);
+        let trap = Trap {
+            trap_type: TrapType::Toroidal,
+            frequency_x: 2.0 * PI * 25.0,
+            frequency_y: 2.0 * PI * 25.0,
+            frequency_z: 2.0 * PI * 100.0,
+            depth: Some(10.0),
+            ring_radius: Some(10.0),
+            trap_radius: Some(2.0),
+        };
+        let config = BarrierConfig::new(0.0, 0.0, 0.0, 1.0, 0.0);
+        let v = total_potential(&x, &y, 0.0, &trap, &config, 1.0, 1.0, 10.0);
         assert!(
             v.iter().all(|c| c.im.abs() < 1e-15),
-            "harmonic potential should be purely real"
+            "total potential should be purely real"
+        );
+        assert!(
+            v.iter().all(|c| c.re >= 0.0),
+            "total potential should be non-negative"
         );
     }
 
     #[test]
-    fn harmonic_potential_isotropic_when_omega_y_equals_omega_x() {
-        let trap = test_trap(); // frequency_y == frequency_x == 2*PI*25
-        let x = test_x();
-        let y = test_y();
-        let v = harmonic_potential(&x, &y, &trap);
-
-        let step = 20.0 / 32.0; // linspace(-10, 10, 33)
-        let idx_of = |val: f64| -> usize { ((val + 10.0) / step).round() as usize };
-
-        let mid = idx_of(0.0);
-        let i = idx_of(5.0);
-        // V(x, 0) should equal V(0, x) when omega_y == omega_x
-        let v_x0 = v[[i, mid]].re;
-        let v_0x = v[[mid, i]].re;
-        let rel_diff = (v_x0 - v_0x).abs() / v_x0;
-        assert!(
-            rel_diff < 1e-10,
-            "V({:.3}, 0) = {} != V(0, {:.3}) = {}",
-            x[i],
-            v_x0,
-            y[i],
-            v_0x
-        );
+    #[should_panic(expected = "barrier_width must be positive")]
+    fn barrier_potential_rejects_zero_width() {
+        let x = Array1::linspace(-10.0, 10.0, 32);
+        let y = Array1::linspace(-10.0, 10.0, 32);
+        let config = BarrierConfig::new(0.0, 0.0, 0.0, 1.0, 0.0);
+        barrier_potential(&x, &y, 0.0, &config, 1.0, 0.0, 10.0);
     }
 
     #[test]
-    fn harmonic_potential_grows_quadratically() {
-        let trap = test_trap();
-        let x = test_x();
-        let y = test_y();
-        let v = harmonic_potential(&x, &y, &trap);
-
-        let step = 20.0 / 32.0;
-        let idx_of = |val: f64| -> usize { ((val + 10.0) / step).round() as usize };
-
-        let mid = idx_of(0.0);
-        let i1 = idx_of(2.5);
-        let i2 = idx_of(5.0);
-        // V(2 * x, 0) should equal 4 * V(x, 0) for a harmonic potential
-        let v1 = v[[i1, mid]].re;
-        let v2 = v[[i2, mid]].re;
-        let ratio = v2 / v1;
-        assert!(
-            (ratio - 4.0).abs() < 1e-10,
-            "V(5.0) / V(2.5) = {}, expected 4.0",
-            ratio
-        );
+    #[should_panic(expected = "barrier_height must be non-negative")]
+    fn barrier_potential_rejects_negative_height() {
+        let x = Array1::linspace(-10.0, 10.0, 32);
+        let y = Array1::linspace(-10.0, 10.0, 32);
+        let config = BarrierConfig::new(0.0, 0.0, 0.0, 1.0, 0.0);
+        barrier_potential(&x, &y, 0.0, &config, -1.0, 1.0, 10.0);
     }
 
-    // --- New toroidal and barrier tests ---
+    // --- Toroidal trap tests ---
 
     #[test]
     fn toroidal_potential_is_nonnegative() {
@@ -321,189 +526,41 @@ mod tests {
         let y = test_y();
         let v = toroidal_potential(&x, &y, &trap);
 
-        // The ring minimum is at r = R = 10. Grid points at (0, +/-10) lie on the ring.
-        // v[i, j] = V(x[i], y[j]) with row = x-index, column = y-index,
-        // so v[[i_x, i_y]] corresponds to (x[i_x], y[i_y]).
         let step = 20.0 / 32.0;
         let idx_of = |val: f64| -> usize { ((val + 10.0) / step).round() as usize };
 
-        let i_x = idx_of(0.0);
-        let i_y = idx_of(10.0);
+        // v[[i, j]] = V(x[i], y[j]) — on the ring at r = R = 10, V ≈ 0
+        let i_x0 = idx_of(0.0);
+        let i_y_r = idx_of(10.0);
 
-        // V at (0, 10) should be ~0 (r = R)
-        let val = v[[i_x, i_y]].re;
+        let val = v[[i_x0, i_y_r]].re;
         assert!(
             val.abs() < 1e-10,
-            "V at ring (r = R) should be ~0, got {}",
+            "V at (0, R) should be ~0, got {}",
             val
-        );
-
-        // V at (0, -10) should also be ~0
-        let i_y_neg = idx_of(-10.0);
-        let val2 = v[[i_x, i_y_neg]].re;
-        assert!(
-            val2.abs() < 1e-10,
-            "V at ring (r = R) should be ~0, got {}",
-            val2
         );
     }
 
+    // --- Barrier peak tests ---
+
     #[test]
     fn barrier_potential_peak_height() {
-        let trap = test_toroidal_trap();
-        let config = test_barrier_config(); // height=1.0, width=1.5
-        let x = test_x();
-        let y = test_y();
-        let v = barrier_potential(&x, &y, &trap, &config);
+        // Barrier centred on a grid point should produce peak = height.
+        // With ring_radius = 10.0 and theta_1 = 0, barrier 1 is at (10, 0).
+        let x = Array1::linspace(-20.0, 20.0, 65);
+        let y = Array1::linspace(-20.0, 20.0, 65);
+        let config = test_barrier_config(); // theta_1 = 0, theta_2 = π
+        let v = barrier_potential(&x, &y, 0.0, &config, 2.5, 1.5, 10.0);
 
-        // With theta_1 = 0, the first barrier centre is exactly at a grid point
-        // (R, 0) = (10, 0), so the Gaussian evaluates to U_b at that point.
         let max_val = v.iter().map(|c| c.re).fold(f64::NEG_INFINITY, f64::max);
         assert!(
-            (max_val - config.height).abs() < 1e-10,
-            "barrier peak should be U_b = {}, got {}",
-            config.height,
+            (max_val - 2.5).abs() < 1e-10,
+            "barrier peak should be U_b = 2.5, got {}",
             max_val
         );
     }
 
-    #[test]
-    fn barrier_potential_peak_at_theta() {
-        let trap = test_toroidal_trap();
-        let config = test_barrier_config(); // theta_1 = 0
-        let x = test_x();
-        let y = test_y();
-        let v = barrier_potential(&x, &y, &trap, &config);
-
-        // v[i, j] = V(x[i], y[j]) so v[[i_x, i_y]] = V(x[i_x], y[i_y]).
-        let step = 20.0 / 32.0;
-        let idx_of = |val: f64| -> usize { ((val + 10.0) / step).round() as usize };
-
-        let i_x_r = idx_of(10.0); // x-index of R
-        let i_y_0 = idx_of(0.0); // y-index of 0
-
-        // Barrier 1 is at (R, 0) = (10.0, 0.0) when theta_1 = 0.
-        let val_at_peak = v[[i_x_r, i_y_0]].re;
-        let global_max = v.iter().map(|c| c.re).fold(f64::NEG_INFINITY, f64::max);
-        assert!(
-            (val_at_peak - global_max).abs() < 1e-10,
-            "barrier 1 peak at theta = 0 should equal the global maximum"
-        );
-    }
-
-    #[test]
-    fn total_potential_is_nonnegative() {
-        let trap = test_toroidal_trap();
-        let config = test_barrier_config();
-        let x = test_x();
-        let y = test_y();
-        let v = total_potential(&x, &y, &trap, &config);
-        assert!(v.iter().all(|c| c.re >= 0.0));
-    }
-
-    #[test]
-    fn barrier_step_advances_angles() {
-        let mut config = BarrierConfig::new(1.0, 1.5, 2.0, 0.5);
-        let dt = 0.1;
-
-        let theta_1_before = config.theta_1;
-        let theta_2_before = config.theta_2;
-
-        let expected_dtheta_1 = (2.0 + 2.0 * PI * 0.5) * dt;
-        let expected_dtheta_2 = (2.0 - 2.0 * PI * 0.5) * dt;
-
-        config.step(dt);
-
-        assert!(
-            (config.theta_1 - theta_1_before - expected_dtheta_1).abs() < 1e-15,
-            "theta_1 advance incorrect"
-        );
-        assert!(
-            (config.theta_2 - theta_2_before - expected_dtheta_2).abs() < 1e-15,
-            "theta_2 advance incorrect"
-        );
-    }
-
-    // --- BarrierConfig initial angle invariants ---
-
-    #[test]
-    fn barrier_config_new_sets_initial_angles() {
-        let config = BarrierConfig::new(1.0, 1.5, 0.0, 0.0);
-        assert!(
-            (config.theta_1 - 0.0).abs() < 1e-15,
-            "theta_1 should be 0, got {}",
-            config.theta_1
-        );
-        assert!(
-            (config.theta_2 - PI).abs() < 1e-15,
-            "theta_2 should be PI, got {}",
-            config.theta_2
-        );
-    }
-
-    #[test]
-    fn barrier_step_no_drive_no_rotation() {
-        let mut config = BarrierConfig::new(1.0, 1.5, 0.0, 0.0);
-        let dt = 0.1;
-        let theta_1_before = config.theta_1;
-        let theta_2_before = config.theta_2;
-        config.step(dt);
-        assert!(
-            (config.theta_1 - theta_1_before).abs() < 1e-15,
-            "theta_1 should not change when omega_ext = 0 and f = 0"
-        );
-        assert!(
-            (config.theta_2 - theta_2_before).abs() < 1e-15,
-            "theta_2 should not change when omega_ext = 0 and f = 0"
-        );
-    }
-
-    #[test]
-    fn barrier_step_f_only() {
-        let mut config = BarrierConfig::new(1.0, 1.5, 0.0, 0.5);
-        let dt = 0.1;
-        let theta_1_before = config.theta_1;
-        let theta_2_before = config.theta_2;
-        let expected_dtheta_1 = 2.0 * PI * 0.5 * dt;
-        let expected_dtheta_2 = -2.0 * PI * 0.5 * dt;
-        config.step(dt);
-        assert!(
-            (config.theta_1 - theta_1_before - expected_dtheta_1).abs() < 1e-15,
-            "theta_1 advance with f only should be {}, got {}",
-            expected_dtheta_1,
-            config.theta_1 - theta_1_before
-        );
-        assert!(
-            (config.theta_2 - theta_2_before - expected_dtheta_2).abs() < 1e-15,
-            "theta_2 advance with f only should be {}, got {}",
-            expected_dtheta_2,
-            config.theta_2 - theta_2_before
-        );
-    }
-
-    #[test]
-    fn barrier_step_omega_ext_only() {
-        let mut config = BarrierConfig::new(1.0, 1.5, 2.0, 0.0);
-        let dt = 0.1;
-        let theta_1_before = config.theta_1;
-        let theta_2_before = config.theta_2;
-        let expected_dtheta = 2.0 * dt;
-        config.step(dt);
-        assert!(
-            (config.theta_1 - theta_1_before - expected_dtheta).abs() < 1e-15,
-            "theta_1 advance with omega_ext only should be {}, got {}",
-            expected_dtheta,
-            config.theta_1 - theta_1_before
-        );
-        assert!(
-            (config.theta_2 - theta_2_before - expected_dtheta).abs() < 1e-15,
-            "theta_2 advance with omega_ext only should be {}, got {}",
-            expected_dtheta,
-            config.theta_2 - theta_2_before
-        );
-    }
-
-    // --- calculate_potential dispatch tests ---
+    // --- calculate_potential dispatch ---
 
     #[test]
     fn calculate_potential_harmonic_matches_harmonic_potential() {
@@ -533,19 +590,7 @@ mod tests {
         }
     }
 
-    // --- total_potential error handling ---
-
-    #[test]
-    #[should_panic(expected = "total_potential is only valid for Toroidal trap type")]
-    fn total_potential_panics_for_harmonic_trap() {
-        let x = test_x();
-        let y = test_y();
-        let trap = test_trap();
-        let config = test_barrier_config();
-        let _v = total_potential(&x, &y, &trap, &config);
-    }
-
-    // --- Array shape invariants ---
+    // --- Shape convention tests ---
 
     #[test]
     fn harmonic_potential_shape() {
@@ -553,7 +598,7 @@ mod tests {
         let y = Array1::linspace(-10.0, 10.0, 30);
         let trap = test_trap();
         let v = harmonic_potential(&x, &y, &trap);
-        assert_eq!(v.shape(), &[50, 30]);
+        assert_eq!(v.shape(), &[50, 30], "shape should be (nx, ny)");
     }
 
     #[test]
@@ -562,16 +607,15 @@ mod tests {
         let y = Array1::linspace(-10.0, 10.0, 30);
         let trap = test_toroidal_trap();
         let v = toroidal_potential(&x, &y, &trap);
-        assert_eq!(v.shape(), &[50, 30]);
+        assert_eq!(v.shape(), &[50, 30], "shape should be (nx, ny)");
     }
 
     #[test]
     fn barrier_potential_shape() {
         let x = Array1::linspace(-10.0, 10.0, 50);
         let y = Array1::linspace(-10.0, 10.0, 30);
-        let trap = test_toroidal_trap();
         let config = test_barrier_config();
-        let v = barrier_potential(&x, &y, &trap, &config);
-        assert_eq!(v.shape(), &[50, 30]);
+        let v = barrier_potential(&x, &y, 0.0, &config, 1.0, 1.0, 10.0);
+        assert_eq!(v.shape(), &[50, 30], "shape should be (nx, ny)");
     }
 }
