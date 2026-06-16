@@ -262,6 +262,7 @@ mod tests {
             frequency_x: 2.0 * PI * 25.0,
             frequency_y: 2.0 * PI * 25.0,
             frequency_z: 2.0 * PI * 100.0,
+            omega_rotation: 0.0,
             depth: None,
             ring_radius: None,
             trap_radius: None,
@@ -274,6 +275,7 @@ mod tests {
             frequency_x: 2.0 * PI * 25.0,
             frequency_y: 2.0 * PI * 25.0,
             frequency_z: 2.0 * PI * 100.0,
+            omega_rotation: 0.0,
             depth: Some(10.0),
             ring_radius: Some(10.0),
             trap_radius: Some(2.0),
@@ -328,9 +330,9 @@ mod tests {
     fn barrier_config_angles_ramp() {
         // f_target = 2 Hz, ramp_duration = 2 s, omega_ext = 0.
         // At t = 1.0 s (mid-ramp):
-        //   ∆φ = π·f_target·t² / ramp_duration = π·2·1/2 = π
-        //   θ₁ = 0 + 0 + π = π
-        //   θ₂ = π + 0 − π = 0
+        //   \(\Delta\phi = \pi f_{\mathrm{target}} t^2 / t_{\mathrm{ramp}} = \pi \cdot 2 \cdot 1 / 2 = \pi\)
+        //   \(\theta_1 = 0 + 0 + \pi = \pi\)
+        //   \(\theta_2 = \pi + 0 - \pi = 0\)
         let config = BarrierConfig::new(0.0, 0.0, 2.0, 2.0, 1.0);
         let (t1, t2) = config.angles_at(1.0);
         assert!((t1 - PI).abs() < 1e-10, "theta_1 = {}, expected pi", t1);
@@ -341,9 +343,9 @@ mod tests {
     fn barrier_config_angles_hold() {
         // f_target = 1 Hz, ramp_duration = 1 s, omega_ext = 0.
         // At t = 2.0 s (1 s after ramp complete):
-        //   ∆φ = π·f_target·t_ramp + 2π·f_target·(t − t_ramp)
-        //      = π·1·1 + 2π·1·(2−1) = π + 2π = 3π
-        //   θ₁ = 0 + 0 + 3π = 3π
+        //   \(\Delta\phi = \pi f_{\mathrm{target}} t_{\mathrm{ramp}} + 2\pi f_{\mathrm{target}}(t - t_{\mathrm{ramp}})
+        //      = \pi\cdot 1\cdot 1 + 2\pi\cdot 1\cdot(2-1) = \pi + 2\pi = 3\pi\)
+        //   \(\theta_1 = 0 + 0 + 3\pi = 3\pi\)
         let config = BarrierConfig::new(0.0, 0.0, 1.0, 1.0, 1.0);
         let (t1, _) = config.angles_at(2.0);
         let expected = 3.0 * PI;
@@ -360,10 +362,11 @@ mod tests {
         // Total differential sweep should be small (order few degrees)
         // for realistic parameters.
         // f_target = 0.01 Hz, ramp_duration = 1.0 s, t = 1.0 s
-        // ∆φ = π·f_target·t² / ramp_duration = π·0.01 ≈ 0.0314 rad ≈ 1.8°
+        // \(\Delta\phi = \pi f_{\mathrm{target}} t^2 / t_{\mathrm{ramp}}
+        //   = \pi\cdot 0.01 \approx 0.0314\ \mathrm{rad} \approx 1.8^\circ\)
         let config = BarrierConfig::new(0.0, 0.0, 0.01, 1.0, 0.0);
         let (t1, t2) = config.angles_at(1.0);
-        // θ₁ − θ₂ = (θ₁(0) + ∆φ) − (θ₂(0) − ∆φ) = −π + 2∆φ
+        // The differential contribution beyond the \(\pi\) offset.
         let differential_sweep = (t1 - t2 + PI).abs();
         assert!(
             differential_sweep < 0.2,
@@ -375,9 +378,9 @@ mod tests {
     #[test]
     fn barrier_config_differential_phase_ramp() {
         let config = BarrierConfig::new(0.0, 0.0, 2.0, 2.0, 0.0);
-        // At mid-ramp, ∆φ should be half of what it would be at t=ramp_duration
-        //   ∆φ(t_ramp) = π·f_target·t_ramp = π·2·2 = 4π
-        //   ∆φ(t_ramp/2) = π·2·1²/2 = π
+        // At mid-ramp, \(\Delta\phi\) should be 1/4 of the full-ramp value
+        //   \(\Delta\phi(t_{\mathrm{ramp}}) = \pi f_{\mathrm{target}} t_{\mathrm{ramp}} = \pi\cdot 2\cdot 2 = 4\pi\)
+        //   \(\Delta\phi(t_{\mathrm{ramp}}/2) = \pi\cdot f_{\mathrm{target}}\cdot (t_{\mathrm{ramp}}/2)^2 / t_{\mathrm{ramp}} = \pi\cdot 2\cdot 1/2 = \pi\)
         let delta_mid = config.differential_phase(1.0);
         let delta_end = config.differential_phase(2.0);
         assert!((delta_mid - PI).abs() < 1e-10);
@@ -466,6 +469,7 @@ mod tests {
             frequency_x: 2.0 * PI * 25.0,
             frequency_y: 2.0 * PI * 25.0,
             frequency_z: 2.0 * PI * 100.0,
+            omega_rotation: 0.0,
             depth: Some(10.0),
             ring_radius: Some(10.0),
             trap_radius: Some(2.0),

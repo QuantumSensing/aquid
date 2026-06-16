@@ -631,7 +631,7 @@ mod tests {
         let gp = (128, 128);
         let noise = generate_wiener_noise(&gp);
         let mean = noise.mean().unwrap();
-        // Standard normal should have mean ≈ 0 with std err ~ 1/sqrt(N)
+        // Standard normal should have mean ≈ 0 with std err \(\sim 1/\sqrt{N}\)
         assert!(mean.abs() < 0.02, "mean = {} should be ~0", mean);
     }
 
@@ -719,7 +719,7 @@ mod tests {
     #[test]
     fn seed_initial_state_shape() {
         let gp = (64, 128);
-        // gamma=1, T=0.5, dt=1, dx=dy=1 → sigma = sqrt(2*1*0.5*1/1) = 1
+        // \(\gamma=1,\ \tilde{T}=0.5,\ \Delta t=1,\ \Delta x=\Delta y=1 \Rightarrow \sigma = 1\)
         let state = seed_initial_state(gp, 1.0, 0.5, 1.0, 1.0, 1.0);
         assert_eq!(state.shape(), &[64, 128]);
     }
@@ -799,7 +799,7 @@ mod tests {
 
     #[test]
     fn lz_vortex() {
-        // (x + iy) * exp(-r²/2) is an L_z = 1 eigenstate.
+        // \((x + iy)\,e^{-r^2/2}\) is an \(\hat{L}_z = 1\) eigenstate.
         // L_z psi / psi should be ≈ 1 everywhere psi is non-zero.
         let nx = 32;
         let ny = 32;
