@@ -1,4 +1,5 @@
 pub mod constants;
+pub mod fft;
 pub mod k_space;
 pub mod potential;
 pub mod projector;

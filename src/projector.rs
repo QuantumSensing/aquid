@@ -5,9 +5,9 @@
 //! Required for post-thermalisation dynamics (bias sweeps, rotation);
 //! optional during pure thermalisation (thesis §3.4.4–3.4.5).
 
+use crate::fft::apply_in_k_space;
 use ndarray::{Array1, Array2};
 use num_complex::Complex;
-use rustfft::FftPlanner;
 
 /// Precomputed Fourier-space mask for the classical-field projector.
 ///
@@ -60,62 +60,11 @@ impl Projector {
     /// This removes all Fourier components with
     /// \(|\mathbf{k}| > k_{\mathrm{cut}}\).
     pub fn apply(&self, phi: &Array2<Complex<f64>>) -> Array2<Complex<f64>> {
-        let (nx, ny) = (phi.shape()[0], phi.shape()[1]);
-
-        let mut planner = FftPlanner::new();
-        let fft_axis1 = planner.plan_fft_forward(ny);
-        let fft_axis0 = planner.plan_fft_forward(nx);
-        let ifft_axis1 = planner.plan_fft_inverse(ny);
-        let ifft_axis0 = planner.plan_fft_inverse(nx);
-
-        let mut spectrum = phi.clone();
-
-        // Forward FFT axis 1 (columns).
-        for mut row in spectrum.rows_mut() {
-            if let Some(row_slice) = row.as_slice_mut() {
-                fft_axis1.process(row_slice);
+        apply_in_k_space(phi, |spectrum| {
+            for ((i, j), value) in spectrum.indexed_iter_mut() {
+                *value *= self.mask[[i, j]];
             }
-        }
-
-        // Forward FFT axis 0 (rows).
-        let mut column = vec![Complex::new(0.0, 0.0); nx];
-        for col_idx in 0..ny {
-            for (row_idx, value) in column.iter_mut().enumerate() {
-                *value = spectrum[[row_idx, col_idx]];
-            }
-            fft_axis0.process(&mut column);
-            for (row_idx, value) in column.iter().enumerate() {
-                spectrum[[row_idx, col_idx]] = *value;
-            }
-        }
-
-        // Apply mask.
-        for ((i, j), value) in spectrum.indexed_iter_mut() {
-            *value *= self.mask[[i, j]];
-        }
-
-        // Inverse FFT axis 0.
-        for col_idx in 0..ny {
-            for (row_idx, value) in column.iter_mut().enumerate() {
-                *value = spectrum[[row_idx, col_idx]];
-            }
-            ifft_axis0.process(&mut column);
-            for (row_idx, value) in column.iter().enumerate() {
-                spectrum[[row_idx, col_idx]] = *value;
-            }
-        }
-
-        // Inverse FFT axis 1.
-        for mut row in spectrum.rows_mut() {
-            if let Some(row_slice) = row.as_slice_mut() {
-                ifft_axis1.process(row_slice);
-            }
-        }
-
-        let norm_factor = 1.0 / ((nx * ny) as f64);
-        spectrum.mapv_inplace(|v| v * norm_factor);
-
-        spectrum
+        })
     }
 }
 
@@ -123,6 +72,7 @@ impl Projector {
 mod tests {
     use super::*;
     use rand_distr::Distribution;
+    use rustfft::FftPlanner;
 
     fn make_k_space(nx: usize, ny: usize, dx: f64, dy: f64) -> (Array1<f64>, Array1<f64>) {
         let kx = Array1::from_shape_fn(nx, |i| {
