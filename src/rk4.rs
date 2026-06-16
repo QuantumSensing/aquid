@@ -4,6 +4,7 @@ use super::constants::*;
 use super::types::*;
 use super::utils::*;
 use crate::potential::calculate_potential;
+use crate::projector::Projector;
 use ndarray::{Array1, Array2};
 use num_complex::Complex;
 use rand_distr::{Distribution, StandardNormal};
@@ -365,6 +366,7 @@ pub fn runge_kutta_step_2d(
     x: &Array1<f64>,
     y_coords: &Array1<f64>,
     thermal_cloud_density: Option<&Array2<f64>>,
+    projector: Option<&Projector>,
 ) -> Array2<Complex<f64>> {
     // Generate Wiener noise from a normal distribution
     let wiener_noise: Array2<f64> = generate_wiener_noise(gridpoints);
@@ -426,7 +428,13 @@ pub fn runge_kutta_step_2d(
         thermal_cloud_density,
     );
 
-    y + Complex::new(*h / 6.0, 0.0) * (k1 + Complex::new(2.0, 0.0) * (k2 + k3) + k4) + noise
+    let result =
+        y + Complex::new(*h / 6.0, 0.0) * (k1 + Complex::new(2.0, 0.0) * (k2 + k3) + k4) + noise;
+
+    match projector {
+        Some(p) => p.apply(&result),
+        None => result,
+    }
 }
 
 /// Performs the full Runge-Kutta time evolution for the SGPE.
@@ -445,6 +453,7 @@ pub fn runge_kutta_2d(
     kx: &Array1<f64>,
     ky: &Array1<f64>,
     thermal_cloud_density: Option<&Array2<f64>>,
+    projector: Option<&Projector>,
     save_full_trajectory: bool,
     dir: &Path,
 ) -> Array2<Complex<f64>> {
@@ -498,6 +507,7 @@ pub fn runge_kutta_2d(
             x_pos,
             y_pos,
             thermal_cloud_density,
+            projector,
         );
 
         t += simulation.timestep;
@@ -711,6 +721,7 @@ mod tests {
             &ky,
             &x,
             &y_coords,
+            None,
             None,
         );
 
@@ -1006,6 +1017,7 @@ mod tests {
             &ky,
             &x,
             &y_coords,
+            None,
             None,
         );
 

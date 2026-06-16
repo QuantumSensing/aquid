@@ -259,6 +259,7 @@ fn main() {
                 &kx,
                 &ky,
                 None, // thermal_cloud_density (gated off)
+                None, // projector (gated off for thermalisation)
                 save_full_trajectory,
                 &run_dir,
             );
