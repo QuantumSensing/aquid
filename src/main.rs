@@ -258,8 +258,8 @@ fn main() {
                 trap.omega_rotation / trap.frequency_x, // \(\tilde\Omega = \Omega/\omega_x\)
                 &kx,
                 &ky,
-                None, // thermal_cloud_density (gated off)
-                None, // projector (gated off for thermalisation)
+                None, // thermal_cloud_density: T=0 → no thermal cloud
+                None, // projector: thermalisation uses implicit grid cutoff; required only for dynamics
                 save_full_trajectory,
                 &run_dir,
             );
