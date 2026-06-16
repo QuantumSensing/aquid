@@ -164,9 +164,10 @@ pub fn angular_momentum_lz(
     // Forward FFT along axis 1 (fast axis / columns).
     let mut spectrum = phi.clone();
     for mut row in spectrum.rows_mut() {
-        if let Some(row_slice) = row.as_slice_mut() {
-            fft_axis1.process(row_slice);
-        }
+        let row_slice = row
+            .as_slice_mut()
+            .expect("angular_momentum_lz requires a contiguous (standard-layout) array");
+        fft_axis1.process(row_slice);
     }
 
     // Forward FFT along axis 0 (rows).
@@ -203,9 +204,10 @@ pub fn angular_momentum_lz(
     }
     // Inverse FFT of dpsi/dx along axis 1.
     for mut row in dpsi_dx_k.rows_mut() {
-        if let Some(row_slice) = row.as_slice_mut() {
-            ifft_axis1.process(row_slice);
-        }
+        let row_slice = row
+            .as_slice_mut()
+            .expect("angular_momentum_lz requires a contiguous (standard-layout) array");
+        ifft_axis1.process(row_slice);
     }
 
     // Inverse FFT of dpsi/dy along axis 0.
@@ -220,9 +222,10 @@ pub fn angular_momentum_lz(
     }
     // Inverse FFT of dpsi/dy along axis 1.
     for mut row in dpsi_dy_k.rows_mut() {
-        if let Some(row_slice) = row.as_slice_mut() {
-            ifft_axis1.process(row_slice);
-        }
+        let row_slice = row
+            .as_slice_mut()
+            .expect("angular_momentum_lz requires a contiguous (standard-layout) array");
+        ifft_axis1.process(row_slice);
     }
 
     let norm_factor = 1.0 / ((nx * ny) as f64);
@@ -259,7 +262,7 @@ pub fn sgpe(
     let i = Complex::new(0.0, 1.0);
 
     let kinetic = kinetic_energy_fourier(phi, k_sq);
-    let interaction = phi.mapv(|p| interaction_strength * p.norm_sqr());
+    let interaction = phi.mapv(|p| Complex::new(interaction_strength * p.norm_sqr(), 0.0));
 
     // Build effective potential including optional Hartree-Fock thermal cloud term.
     let effective_potential = match thermal_cloud_density {
