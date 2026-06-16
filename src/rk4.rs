@@ -3,12 +3,12 @@
 use super::constants::*;
 use super::types::*;
 use super::utils::*;
+use crate::fft::{apply_in_k_space, forward_2d, inverse_2d_normalised};
 use crate::potential::calculate_potential;
 use crate::projector::Projector;
 use ndarray::{Array1, Array2};
 use num_complex::Complex;
 use rand_distr::{Distribution, StandardNormal};
-use rustfft::FftPlanner;
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -65,66 +65,18 @@ pub fn seed_initial_state(
 }
 
 /// Computes the kinetic energy term in Fourier space using a 2D FFT.
+///
+/// Applies the kinetic operator \(k^2/2\) to each Fourier component via the
+/// shared pipeline in [`crate::fft::apply_in_k_space`].
 pub fn kinetic_energy_fourier(
     phi: &Array2<Complex<f64>>,
     k_sq: &Array2<f64>,
 ) -> Array2<Complex<f64>> {
-    let (nx, ny) = (phi.shape()[0], phi.shape()[1]);
-
-    let mut planner = FftPlanner::new();
-    let fft_axis1 = planner.plan_fft_forward(ny);
-    let fft_axis0 = planner.plan_fft_forward(nx);
-    let ifft_axis1 = planner.plan_fft_inverse(ny);
-    let ifft_axis0 = planner.plan_fft_inverse(nx);
-
-    let mut spectrum = phi.clone();
-
-    // Forward FFT along the fast axis (axis 1 / columns).
-    for mut row in spectrum.rows_mut() {
-        if let Some(row_slice) = row.as_slice_mut() {
-            fft_axis1.process(row_slice);
+    apply_in_k_space(phi, |spectrum| {
+        for ((i, j), value) in spectrum.indexed_iter_mut() {
+            *value *= 0.5 * k_sq[[i, j]];
         }
-    }
-
-    // Forward FFT along axis 0 (rows) using a scratch buffer per column.
-    let mut column = vec![Complex::new(0.0, 0.0); nx];
-    for col_idx in 0..ny {
-        for (row_idx, value) in column.iter_mut().enumerate() {
-            *value = spectrum[[row_idx, col_idx]];
-        }
-        fft_axis0.process(&mut column);
-        for (row_idx, value) in column.iter().enumerate() {
-            spectrum[[row_idx, col_idx]] = *value;
-        }
-    }
-
-    // Apply the kinetic energy operator in k-space.
-    for ((i, j), value) in spectrum.indexed_iter_mut() {
-        *value *= 0.5 * k_sq[[i, j]];
-    }
-
-    // Inverse FFT along axis 0.
-    for col_idx in 0..ny {
-        for (row_idx, value) in column.iter_mut().enumerate() {
-            *value = spectrum[[row_idx, col_idx]];
-        }
-        ifft_axis0.process(&mut column);
-        for (row_idx, value) in column.iter().enumerate() {
-            spectrum[[row_idx, col_idx]] = *value;
-        }
-    }
-
-    // Inverse FFT along axis 1.
-    for mut row in spectrum.rows_mut() {
-        if let Some(row_slice) = row.as_slice_mut() {
-            ifft_axis1.process(row_slice);
-        }
-    }
-
-    let norm_factor = 1.0 / ((nx * ny) as f64);
-    spectrum.mapv_inplace(|value| value * norm_factor);
-
-    spectrum
+    })
 }
 
 /// Computes the angular momentum operator \(\hat{L}_z\) acting on a wavefunction.
@@ -156,32 +108,10 @@ pub fn angular_momentum_lz(
 ) -> Array2<Complex<f64>> {
     let (nx, ny) = (phi.shape()[0], phi.shape()[1]);
 
-    let mut planner = FftPlanner::new();
-    let fft_axis1 = planner.plan_fft_forward(ny);
-    let fft_axis0 = planner.plan_fft_forward(nx);
-    let ifft_axis1 = planner.plan_fft_inverse(ny);
-    let ifft_axis0 = planner.plan_fft_inverse(nx);
-
-    // Forward FFT along axis 1 (fast axis / columns).
+    // One forward transform feeds both gradient components, so the field is not
+    // transformed forward twice.
     let mut spectrum = phi.clone();
-    for mut row in spectrum.rows_mut() {
-        let row_slice = row
-            .as_slice_mut()
-            .expect("angular_momentum_lz requires a contiguous (standard-layout) array");
-        fft_axis1.process(row_slice);
-    }
-
-    // Forward FFT along axis 0 (rows).
-    let mut column = vec![Complex::new(0.0, 0.0); nx];
-    for col_idx in 0..ny {
-        for (row_idx, value) in column.iter_mut().enumerate() {
-            *value = spectrum[[row_idx, col_idx]];
-        }
-        fft_axis0.process(&mut column);
-        for (row_idx, value) in column.iter().enumerate() {
-            spectrum[[row_idx, col_idx]] = *value;
-        }
-    }
+    forward_2d(&mut spectrum);
 
     let i = Complex::new(0.0, 1.0);
 
@@ -189,56 +119,18 @@ pub fn angular_momentum_lz(
     let ikx = Array2::from_shape_fn((nx, 1), |(idx, _)| i * kx[idx]);
     let iky = Array2::from_shape_fn((1, ny), |(_, idx)| i * ky[idx]);
 
-    // Gradient in k-space: d/dx -> i*kx, d/dy -> i*ky.
-    let mut dpsi_dx_k = &spectrum * &ikx;
-    let mut dpsi_dy_k = &spectrum * &iky;
-
-    // Inverse FFT of dpsi/dx along axis 0.
-    for col_idx in 0..ny {
-        for (row_idx, value) in column.iter_mut().enumerate() {
-            *value = dpsi_dx_k[[row_idx, col_idx]];
-        }
-        ifft_axis0.process(&mut column);
-        for (row_idx, value) in column.iter().enumerate() {
-            dpsi_dx_k[[row_idx, col_idx]] = *value;
-        }
-    }
-    // Inverse FFT of dpsi/dx along axis 1.
-    for mut row in dpsi_dx_k.rows_mut() {
-        let row_slice = row
-            .as_slice_mut()
-            .expect("angular_momentum_lz requires a contiguous (standard-layout) array");
-        ifft_axis1.process(row_slice);
-    }
-
-    // Inverse FFT of dpsi/dy along axis 0.
-    for col_idx in 0..ny {
-        for (row_idx, value) in column.iter_mut().enumerate() {
-            *value = dpsi_dy_k[[row_idx, col_idx]];
-        }
-        ifft_axis0.process(&mut column);
-        for (row_idx, value) in column.iter().enumerate() {
-            dpsi_dy_k[[row_idx, col_idx]] = *value;
-        }
-    }
-    // Inverse FFT of dpsi/dy along axis 1.
-    for mut row in dpsi_dy_k.rows_mut() {
-        let row_slice = row
-            .as_slice_mut()
-            .expect("angular_momentum_lz requires a contiguous (standard-layout) array");
-        ifft_axis1.process(row_slice);
-    }
-
-    let norm_factor = 1.0 / ((nx * ny) as f64);
-    dpsi_dx_k.mapv_inplace(|val| val * norm_factor);
-    dpsi_dy_k.mapv_inplace(|val| val * norm_factor);
+    // Gradient in k-space: d/dx -> i*kx, d/dy -> i*ky, then back to real space.
+    let mut dpsi_dx = &spectrum * &ikx;
+    let mut dpsi_dy = &spectrum * &iky;
+    inverse_2d_normalised(&mut dpsi_dx);
+    inverse_2d_normalised(&mut dpsi_dy);
 
     // Real-space grid for position operators, broadcast to (nx, ny).
     let x_grid = Array2::from_shape_fn((nx, 1), |(idx, _)| Complex::new(x[idx], 0.0));
     let y_grid = Array2::from_shape_fn((1, ny), |(_, idx)| Complex::new(y[idx], 0.0));
 
     // Lz psi = -i * (x * dpsi/dy - y * dpsi/dx)
-    -i * (&x_grid * &dpsi_dy_k - &y_grid * &dpsi_dx_k)
+    -i * (&x_grid * &dpsi_dy - &y_grid * &dpsi_dx)
 }
 
 /// Computes the right-hand side of the SGPE.
