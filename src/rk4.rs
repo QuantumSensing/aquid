@@ -743,7 +743,7 @@ mod tests {
         let gp = (128, 128);
         let state = seed_initial_state(gp, 1.0, 0.5, 1.0, 1.0, 1.0);
         let mean = state.iter().map(|c| c.re).sum::<f64>() / (128.0 * 128.0);
-        // Statistical test: on 128² samples the standard error is ~0.008.
+        // Statistical test: on \(128 \times 128\) samples the standard error is \(\sim 0.008\).
         assert!(mean.abs() < 0.03, "real mean = {} should be ~0", mean);
     }
 
@@ -759,7 +759,7 @@ mod tests {
         let rel_err = (mean_sq - expected).abs() / expected;
         assert!(
             rel_err < 0.1,
-            "⟨|ψ|²⟩ = {:.4e}, expected {:.4e} (rel_err = {:.2e})",
+            "mean |psi|^2 = {:.4e}, expected {:.4e} (rel_err = {:.2e})",
             mean_sq,
             expected,
             rel_err
@@ -804,7 +804,7 @@ mod tests {
 
         let lz = angular_momentum_lz(&psi, &x, &y, &kx, &ky);
         let max_val = lz.iter().map(|c| c.norm()).fold(0.0_f64, f64::max);
-        // FFT gradients on a 32² grid have O(1e-5) discretisation error.
+        // FFT gradients on a \(32 \times 32\) grid have O(1e-5) discretisation error.
         assert!(
             max_val < 2e-5,
             "L_z on real Gaussian should be near zero, max |Lz psi| = {:.2e}",
@@ -848,7 +848,7 @@ mod tests {
                 }
             }
         }
-        // FFT gradients on a 32² grid have O(1e-5) discretisation error.
+        // FFT gradients on a \(32 \times 32\) grid have O(1e-5) discretisation error.
         assert!(
             max_ratio_err < 2e-5,
             "L_z eigenvalue error = {:.2e}, expected < 2e-5",
