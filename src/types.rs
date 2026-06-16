@@ -24,6 +24,8 @@ pub struct Trap {
     pub frequency_y: f64,
     /// Vertical trap frequency \(\omega_z\) [rad/s]
     pub frequency_z: f64,
+    /// Rotation frequency of the reference frame \(\Omega\) [rad/s]
+    pub omega_rotation: f64,
     /// Amplitude of the ring trap
     pub depth: Option<f64>,
     /// Radius of the ring
@@ -158,6 +160,7 @@ mod tests {
             frequency_x: 2.0 * PI * 570.0,
             frequency_y: 2.0 * PI * 570.0,
             frequency_z: 2.0 * PI * 300.0,
+            omega_rotation: 0.0,
             depth: None,
             ring_radius: None,
             trap_radius: None,
@@ -172,6 +175,7 @@ mod tests {
             frequency_x: 2.0 * PI * 520.0,
             frequency_y: 2.0 * PI * 520.0,
             frequency_z: 2.0 * PI * 300.0,
+            omega_rotation: 0.0,
             depth: None,
             ring_radius: None,
             trap_radius: None,

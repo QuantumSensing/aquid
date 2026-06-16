@@ -38,6 +38,11 @@ You do not review or approve your own output.
 - Named constants for all magic numbers; include units in the name or a comment.
 - Never produce figures directly from simulation code. Save results to `data/<name>.csv`.
 - Follow the repository structure in CLAUDE.md exactly.
+- **NO ASCII MATH in any comment, docstring, or string.** Use LaTeX notation
+  everywhere: `\(e^{-r^2/2}\)` not `exp(-r²/2)`, `\(\sqrt{N}\)` not `sqrt(N)`,
+  `\(\tilde{T}\)` not `T_tilde`. This applies to `//` comments, `///` doc
+  comments, and test comments equally. Unicode superscripts (²) and middle-dots (·)
+  are also forbidden — use proper LaTeX `\(x^2\)`, `\(\cdot\)`.
 - Never commit. Never push. Never open PRs. That is the coordinator's responsibility.
 
 ## On completion
