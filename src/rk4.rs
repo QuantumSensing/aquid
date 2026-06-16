@@ -35,11 +35,24 @@ pub fn noise_magnitude(gamma: f64, temperature: f64, dt: f64, dx: f64, dy: f64) 
 
 /// Seeds the initial state from a thermal noise distribution.
 ///
-/// Generates \(\psi_0 = A (\xi_1 + i\xi_2) / \sqrt{2}\) where \(\xi_1, \xi_2\)
-/// are independent standard-normal random fields and \(A\) is the amplitude
-/// (typically equal to the noise magnitude from the fluctuation-dissipation
-/// relation).
-pub fn seed_initial_state(gridpoints: (usize, usize), amplitude: f64) -> Array2<Complex<f64>> {
+/// \[
+/// \psi_0 = \sigma\,(\xi_1 + i\xi_2) / \sqrt{2},
+/// \qquad
+/// \sigma = \sqrt{\frac{2\gamma\tilde{T}\,\Delta t}{\Delta x\,\Delta y}}
+/// \]
+///
+/// where \(\xi_1, \xi_2\) are independent standard-normal random fields.
+/// The amplitude \(\sigma\) matches the per-step Wiener noise increment
+/// (thesis Eq. 3.56).
+pub fn seed_initial_state(
+    gridpoints: (usize, usize),
+    gamma: f64,
+    temperature: f64,
+    dt: f64,
+    dx: f64,
+    dy: f64,
+) -> Array2<Complex<f64>> {
+    let amplitude = noise_magnitude(gamma, temperature, dt, dx, dy);
     let mut rng = rand::thread_rng();
     let normal = StandardNormal;
     let norm_factor = amplitude / std::f64::consts::SQRT_2;
@@ -706,14 +719,15 @@ mod tests {
     #[test]
     fn seed_initial_state_shape() {
         let gp = (64, 128);
-        let state = seed_initial_state(gp, 1.0);
+        // gamma=1, T=0.5, dt=1, dx=dy=1 → sigma = sqrt(2*1*0.5*1/1) = 1
+        let state = seed_initial_state(gp, 1.0, 0.5, 1.0, 1.0, 1.0);
         assert_eq!(state.shape(), &[64, 128]);
     }
 
     #[test]
     fn seed_initial_state_mean_zero() {
         let gp = (128, 128);
-        let state = seed_initial_state(gp, 1.0);
+        let state = seed_initial_state(gp, 1.0, 0.5, 1.0, 1.0, 1.0);
         let mean = state.iter().map(|c| c.re).sum::<f64>() / (128.0 * 128.0);
         assert!(mean.abs() < 0.01, "real mean = {} should be ~0", mean);
     }
@@ -721,8 +735,9 @@ mod tests {
     #[test]
     fn seed_initial_state_variance() {
         let gp = (128, 128);
-        let amplitude = 1.0;
-        let state = seed_initial_state(gp, amplitude);
+        let (gamma, temp, dt, dx, dy) = (1.0, 0.5, 1.0, 1.0, 1.0);
+        let state = seed_initial_state(gp, gamma, temp, dt, dx, dy);
+        let amplitude = noise_magnitude(gamma, temp, dt, dx, dy);
         let n_elements = (gp.0 * gp.1) as f64;
         let mean_sq = state.iter().map(|c| c.norm_sqr()).sum::<f64>() / n_elements;
         let expected = amplitude * amplitude;

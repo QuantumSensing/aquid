@@ -234,9 +234,14 @@ fn main() {
 
             let k_sq_clone = k_sq.clone();
 
-            // Seed initial state from thermal noise.
-            let initial_amplitude = noise_magnitude;
-            let initial_phi = rk4::seed_initial_state(simulation.gridpoints, initial_amplitude);
+            let initial_phi = rk4::seed_initial_state(
+                simulation.gridpoints,
+                condensate.gamma,
+                condensate.temperature,
+                simulation.timestep,
+                simulation.step_size.0,
+                simulation.step_size.1,
+            );
 
             // Run the SGPE simulation using the Runge-Kutta method
             let _phi = rk4::runge_kutta_2d(
