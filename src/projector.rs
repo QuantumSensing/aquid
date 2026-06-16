@@ -46,7 +46,10 @@ impl Projector {
         let ky_sq = ky.mapv(|k| k * k).into_shape((1, ny)).expect("ky reshape");
         let k_sq = kx_sq + ky_sq;
 
-        let mask = k_sq.mapv(|k2| if k2 <= k_cut_sq { 1.0_f64 } else { 0.0_f64 });
+        let mut mask = k_sq.mapv(|k2| if k2 <= k_cut_sq { 1.0_f64 } else { 0.0_f64 });
+        // The k=0 mode must always be retained — it carries the condensed fraction
+        // and removing it would spuriously shift the atom number.
+        mask[[0, 0]] = 1.0;
 
         Self { mask }
     }
@@ -163,8 +166,25 @@ mod tests {
         // Even with very low cutoff, k=0 must stay.
         let eps_cut = 0.01_f64;
         let p = Projector::new(eps_cut, 0.0, &kx, &ky);
-        // The (0,0) mode is the first index in standard FFT ordering.
         assert!(p.mask[[0, 0]] == 1.0, "k=0 mode must always be retained");
+    }
+
+    #[test]
+    fn projector_k0_retained_with_negative_cutoff() {
+        let (kx, ky) = make_k_space(32, 32, 1.0, 1.0);
+        // T = 0, mu < 0 gives negative eps_cut — k=0 must still stay.
+        let p = Projector::new(0.0, -10.0, &kx, &ky);
+        assert!(
+            p.mask[[0, 0]] == 1.0,
+            "k=0 mode must be retained even with negative cutoff"
+        );
+        // Verify that other low-k modes ARE removed when k_cut^2 < 0.
+        let n_retained = p.mask.iter().filter(|&&v| v == 1.0).count();
+        assert_eq!(
+            n_retained, 1,
+            "only k=0 should be retained with negative cutoff, got {}",
+            n_retained
+        );
     }
 
     #[test]

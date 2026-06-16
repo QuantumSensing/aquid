@@ -743,7 +743,8 @@ mod tests {
         let gp = (128, 128);
         let state = seed_initial_state(gp, 1.0, 0.5, 1.0, 1.0, 1.0);
         let mean = state.iter().map(|c| c.re).sum::<f64>() / (128.0 * 128.0);
-        assert!(mean.abs() < 0.01, "real mean = {} should be ~0", mean);
+        // Statistical test: on 128² samples the standard error is ~0.008.
+        assert!(mean.abs() < 0.03, "real mean = {} should be ~0", mean);
     }
 
     #[test]
