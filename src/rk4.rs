@@ -20,6 +20,19 @@ fn debug_io_enabled() -> bool {
     })
 }
 
+/// Computes the noise magnitude from the fluctuation-dissipation relation.
+///
+/// \[
+/// \sigma = \sqrt{\frac{2\gamma\tilde{T}\,\Delta t}{\Delta x\,\Delta y}}
+/// \]
+///
+/// This is the per-step amplitude of the complex Wiener noise increment in the
+/// dimensionless SGPE (thesis Eq. 3.56). The same amplitude is used for the
+/// initial thermal seed \(\psi_0 = \eta\).
+pub fn noise_magnitude(gamma: f64, temperature: f64, dt: f64, dx: f64, dy: f64) -> f64 {
+    (2.0 * gamma * temperature * dt / (dx * dy)).sqrt()
+}
+
 /// Seeds the initial state from a thermal noise distribution.
 ///
 /// Generates \(\psi_0 = A (\xi_1 + i\xi_2) / \sqrt{2}\) where \(\xi_1, \xi_2\)

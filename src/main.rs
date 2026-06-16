@@ -167,12 +167,14 @@ fn main() {
 
     let (kx, ky, k_sq) = generate_k_space(&simulation);
 
-    // Calculate noise magnitude
-    // The noise magnitude is related to the temperature and damping of the system
-    let noise_magnitude: f64 =
-        (2.0 * condensate.gamma * condensate.temperature * simulation.timestep
-            / (simulation.step_size.0 * simulation.step_size.1))
-            .sqrt();
+    // Calculate noise magnitude from the fluctuation-dissipation relation
+    let noise_magnitude: f64 = rk4::noise_magnitude(
+        condensate.gamma,
+        condensate.temperature,
+        simulation.timestep,
+        simulation.step_size.0,
+        simulation.step_size.1,
+    );
 
     // Write coordinates to file
     let grid_dir = data_root.join("grid");
@@ -232,7 +234,7 @@ fn main() {
 
             let k_sq_clone = k_sq.clone();
 
-            // Seed initial state from thermal noise (FDT amplitude = noise_magnitude).
+            // Seed initial state from thermal noise.
             let initial_amplitude = noise_magnitude;
             let initial_phi = rk4::seed_initial_state(simulation.gridpoints, initial_amplitude);
 
@@ -248,7 +250,7 @@ fn main() {
                 &x,
                 &y,
                 &k_sq_clone,
-                trap.omega_rotation / trap.frequency_x, // dimensionless Ω̃ = Ω/ω_x
+                trap.omega_rotation / trap.frequency_x, // \(\tilde\Omega = \Omega/\omega_x\)
                 &kx,
                 &ky,
                 None, // thermal_cloud_density (gated off)
